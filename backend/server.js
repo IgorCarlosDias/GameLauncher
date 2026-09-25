@@ -4,10 +4,31 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
-const { exec } = require("child_process");
+const { exec, spawn } = require("child_process");
 const axios = require("axios");
 
 const { getGameCover } = require("./services/steamgriddb");
+
+let ws = null;
+try {
+  ws = require("windows-shortcuts");
+} catch {
+  // Ignora caso windows-shortcuts não esteja instalado
+}
+
+function resolveShortcut(filePath) {
+  return new Promise((resolve) => {
+    if (!ws) return resolve(null);
+    try {
+      ws.query(filePath, (err, res) => {
+        if (err || !res) return resolve(null);
+        resolve(res);
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
 
 
 const app = express();
@@ -391,7 +412,7 @@ app.post("/refresh", async (req, res) => {
 // ABRIR JOGO
 // =========================
 
-app.post("/play", (req, res) => {
+app.post("/play", async (req, res) => {
   const { id } = req.body;
   const game = games.find(g => g.id === id);
 
@@ -405,10 +426,62 @@ app.post("/play", (req, res) => {
   console.log(`Abrindo: ${game.name}`);
 
   try {
-    if (game.extension === ".lnk" || game.extension === ".url") {
-      exec(`cmd /c start "" "${game.file}"`);
+    let pid = null;
+    let exeName = null;
+
+    if (game.extension === ".lnk") {
+      const shortcut = await resolveShortcut(game.file);
+      let targetExe = shortcut && shortcut.target && fs.existsSync(shortcut.target) ? shortcut.target : null;
+      let targetCwd = shortcut && shortcut.workingDir ? shortcut.workingDir : (targetExe ? path.dirname(targetExe) : null);
+      let targetArgs = shortcut && shortcut.args ? shortcut.args.trim().split(/\s+/).filter(Boolean) : [];
+
+      if (targetExe && targetExe.toLowerCase().endsWith(".exe")) {
+        exeName = path.basename(targetExe);
+        const child = spawn(targetExe, targetArgs, {
+          detached: true,
+          stdio: "ignore",
+          cwd: targetCwd || path.dirname(targetExe)
+        });
+        child.unref();
+        pid = child.pid;
+      } else {
+        exeName = path.basename(game.file, ".lnk") + ".exe";
+        const child = spawn("cmd.exe", ["/c", "start", '""', game.file], {
+          detached: true,
+          stdio: "ignore",
+          cwd: path.dirname(game.file)
+        });
+        child.unref();
+        pid = child.pid;
+      }
+    } else if (game.extension === ".url") {
+      let steamId = null;
+      try {
+        const content = fs.readFileSync(game.file, "utf-8");
+        const match = content.match(/steam:\/\/rungameid\/(\d+)/i);
+        if (match) steamId = match[1];
+      } catch {}
+
+      exeName = path.basename(game.file, ".url") + ".exe";
+      game.steamId = steamId;
+
+      const child = spawn("cmd.exe", ["/c", "start", '""', game.file], {
+        detached: true,
+        stdio: "ignore",
+        cwd: path.dirname(game.file)
+      });
+      child.unref();
+      pid = child.pid;
     } else {
-      exec(`"${game.file}"`);
+      // Executável direto (.exe)
+      exeName = path.basename(game.file);
+      const child = spawn(game.file, [], {
+        detached: true,
+        stdio: "ignore",
+        cwd: path.dirname(game.file)
+      });
+      child.unref();
+      pid = child.pid;
     }
 
     activeGame = {
@@ -417,8 +490,13 @@ app.post("/play", (req, res) => {
       file: game.file,
       extension: game.extension,
       cover: game.cover,
+      pid: pid,
+      exeName: exeName,
+      steamId: game.steamId || null,
       startedAt: new Date().toISOString()
     };
+
+    console.log(`Jogo iniciado: ${game.name} (PID: ${pid}, Executável: ${exeName})`);
 
     res.json({
       success: true,
@@ -426,10 +504,10 @@ app.post("/play", (req, res) => {
       activeGame
     });
   } catch (error) {
-    console.log(error);
+    console.error("Erro ao abrir jogo:", error);
     res.status(500).json({
       success: false,
-      message: "Erro ao abrir jogo"
+      message: "Erro ao abrir jogo: " + error.message
     });
   }
 });
@@ -445,31 +523,47 @@ app.get("/system/active-game", (req, res) => {
   });
 });
 
-// Fechar jogo atual (Alt+F4 ou taskkill forçado)
+// Fechar ou encerrar jogo via taskkill
 app.post("/system/close-game", async (req, res) => {
-  const { force } = req.body || {};
+  const { force = true } = req.body || {};
+  const current = activeGame;
+
   try {
-    if (force && activeGame && activeGame.extension === ".exe") {
-      const exeName = path.basename(activeGame.file);
-      exec(`taskkill /F /IM "${exeName}" /T`);
+    if (current) {
+      // 1. Mata pelo PID registrado
+      if (current.pid) {
+        await runSysControl("killpid", current.pid);
+        exec(`taskkill /F /PID ${current.pid} /T`);
+      }
+
+      // 2. Mata pelo nome do executável registrado
+      if (current.exeName) {
+        await runSysControl("killname", `"${current.exeName}"`);
+        exec(`taskkill /F /IM "${current.exeName}" /T`);
+      }
     }
 
-    // Envia Alt+F4 nativo para fechar janela do jogo
-    await runSysControl("altf4");
+    // 3. Mata processo da janela atualmente em primeiro plano
+    await runSysControl("killforeground");
 
-    const closed = activeGame;
+    // 4. Se não for forçado (modo suave), envia Alt+F4
+    if (!force) {
+      await runSysControl("altf4");
+    }
+
     activeGame = null;
 
     res.json({
       success: true,
-      message: force ? "Processo finalizado com força." : "Comando Alt+F4 enviado.",
-      closed
+      message: current ? `Jogo ${current.name} encerrado via taskkill.` : "Processo encerrado com sucesso via taskkill.",
+      closed: current
     });
   } catch (error) {
     console.error("Erro fechando jogo:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
 
 // Limpar estado do jogo ativo manualmente
 app.post("/system/clear-active", (req, res) => {

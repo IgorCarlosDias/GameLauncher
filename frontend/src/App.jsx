@@ -126,18 +126,18 @@ export default function App() {
     }
   }
 
-  // Fechar jogo atual
-  async function closeActiveGame(force = false) {
+  // Encerrar jogo atual (com taskkill)
+  async function closeActiveGame(force = true) {
     triggerHaptic(50);
-    showToast(force ? "Encerrando processo forçadamente..." : "Enviando Alt+F4...", "info");
+    showToast(force ? "Encerrando processo com taskkill..." : "Enviando Alt+F4...", "info");
     try {
-      await axios.post(`${API}/system/close-game`, { force });
-      showToast(force ? "Jogo finalizado com sucesso" : "Alt+F4 enviado ao PC", "success");
+      const res = await axios.post(`${API}/system/close-game`, { force });
+      showToast(res.data?.message || (force ? "Jogo encerrado via taskkill" : "Alt+F4 enviado ao PC"), "success");
       setActiveGame(null);
       setActiveSeconds(0);
     } catch (err) {
       console.error("Erro ao fechar:", err);
-      showToast("Falha ao enviar comando de fechamento", "error");
+      showToast("Falha ao encerrar jogo", "error");
     }
   }
 
@@ -325,24 +325,32 @@ export default function App() {
               <div className="banner-titles">
                 <span className="banner-tag">JOGANDO AGORA</span>
                 <strong className="banner-name">{activeGame.name}</strong>
-                <span className="banner-timer">⏱️ {formatTimer(activeSeconds)}</span>
+                <div className="banner-meta">
+                  <span className="banner-timer">⏱️ {formatTimer(activeSeconds)}</span>
+                  {activeGame.pid && (
+                    <span className="banner-pid" title="Process ID">PID: {activeGame.pid}</span>
+                  )}
+                  {activeGame.exeName && (
+                    <span className="banner-exe">{activeGame.exeName}</span>
+                  )}
+                </div>
               </div>
             </div>
 
             <div className="banner-buttons">
               <button
-                className="btn btn-close-soft"
-                onClick={() => closeActiveGame(false)}
-                title="Envia Alt+F4 para fechar salvando o progresso"
+                className="btn btn-close-taskkill"
+                onClick={() => closeActiveGame(true)}
+                title="Encerra o processo do jogo imediatamente via taskkill"
               >
-                ✕ Fechar (Alt+F4)
+                🛑 Encerrar Jogo (Taskkill)
               </button>
               <button
-                className="btn btn-close-force"
-                onClick={() => closeActiveGame(true)}
-                title="Encerra o processo do jogo forçadamente"
+                className="btn btn-close-soft"
+                onClick={() => closeActiveGame(false)}
+                title="Envia Alt+F4 para tentar salvar o progresso antes de sair"
               >
-                ⚡ Forçar
+                ✕ Alt+F4
               </button>
               <button
                 className="btn btn-dismiss"
@@ -499,19 +507,36 @@ export default function App() {
                           {game.name}
                         </h2>
 
-                        <button
-                          className={`btn btn-play ${isLaunching ? "launching" : ""}`}
-                          onClick={() => playGame(game)}
-                          disabled={isLaunching}
-                        >
-                          {isLaunching ? (
-                            <>
-                              <span className="btn-spinner"></span> Iniciando...
-                            </>
-                          ) : (
-                            <>▶ Jogar</>
+                        <div className="card-btn-row">
+                          <button
+                            className={`btn btn-play ${isLaunching ? "launching" : ""}`}
+                            onClick={() => playGame(game)}
+                            disabled={isLaunching}
+                          >
+                            {isLaunching ? (
+                              <>
+                                <span className="btn-spinner"></span> Iniciando...
+                              </>
+                            ) : isCurrent ? (
+                              <>▶ Em Jogo</>
+                            ) : (
+                              <>▶ Jogar</>
+                            )}
+                          </button>
+
+                          {isCurrent && (
+                            <button
+                              className="btn btn-card-kill"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                closeActiveGame(true);
+                              }}
+                              title="Encerrar processo do jogo via taskkill"
+                            >
+                              🛑 Fechar
+                            </button>
                           )}
-                        </button>
+                        </div>
                       </div>
                     </article>
                   );
@@ -586,6 +611,34 @@ export default function App() {
                   <button className="remote-btn" onClick={() => sendKey("enter")}>
                     ↵ Enter
                   </button>
+                </div>
+              </div>
+
+              {/* Seção Encerrar Jogo (Taskkill) */}
+              <div className="remote-section">
+                <span className="section-title">🛑 Encerramento Forçado (Taskkill)</span>
+                <div className="remote-kill-container">
+                  {activeGame ? (
+                    <button
+                      className="remote-btn btn-danger-action btn-kill-wide"
+                      onClick={() => {
+                        setRemoteOpen(false);
+                        closeActiveGame(true);
+                      }}
+                    >
+                      🛑 Encerrar {activeGame.name} {activeGame.pid ? `(PID: ${activeGame.pid})` : ""}
+                    </button>
+                  ) : (
+                    <button
+                      className="remote-btn btn-danger-action btn-kill-wide"
+                      onClick={() => {
+                        setRemoteOpen(false);
+                        closeActiveGame(true);
+                      }}
+                    >
+                      🛑 Forçar Fechamento de Jogo / Janela Ativa na TV (Taskkill)
+                    </button>
+                  )}
                 </div>
               </div>
 

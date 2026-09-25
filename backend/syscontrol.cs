@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -8,6 +9,12 @@ class Program {
 
     [DllImport("user32.dll")]
     public static extern IntPtr SendMessageW(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     private const int WM_APPCOMMAND = 0x0319;
     private const int APPCOMMAND_VOLUME_MUTE = 0x80000;
@@ -42,6 +49,47 @@ class Program {
 
     static void SendAppCmd(int cmd) {
         SendMessageW((IntPtr)0xffff, WM_APPCOMMAND, IntPtr.Zero, (IntPtr)cmd);
+    }
+
+    static void KillPid(int pid) {
+        if (pid <= 4) return;
+        try {
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = "taskkill.exe";
+            psi.Arguments = "/F /PID " + pid + " /T";
+            psi.CreateNoWindow = true;
+            psi.UseShellExecute = false;
+            Process p = Process.Start(psi);
+            if (p != null) p.WaitForExit(2000);
+        } catch { }
+    }
+
+    static void KillName(string name) {
+        if (string.IsNullOrEmpty(name)) return;
+        try {
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = "taskkill.exe";
+            psi.Arguments = "/F /IM \"" + name + "\" /T";
+            psi.CreateNoWindow = true;
+            psi.UseShellExecute = false;
+            Process p = Process.Start(psi);
+            if (p != null) p.WaitForExit(2000);
+        } catch { }
+    }
+
+    static void KillForeground() {
+        IntPtr hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return;
+        uint pid = 0;
+        GetWindowThreadProcessId(hwnd, out pid);
+        if (pid <= 4) return;
+        try {
+            Process proc = Process.GetProcessById((int)pid);
+            string pName = proc.ProcessName.ToLowerInvariant();
+            if (pName != "explorer" && pName != "dwm" && pName != "taskhostw" && pName != "node") {
+                KillPid((int)pid);
+            }
+        } catch { }
     }
 
     static void Main(string[] args) {
@@ -87,6 +135,20 @@ class Program {
                 break;
             case "enter":
                 PressKey(VK_RETURN);
+                break;
+            case "killpid":
+                int targetPid = 0;
+                if (args.Length > 1 && int.TryParse(args[1], out targetPid)) {
+                    KillPid(targetPid);
+                }
+                break;
+            case "killname":
+                if (args.Length > 1) {
+                    KillName(args[1]);
+                }
+                break;
+            case "killforeground":
+                KillForeground();
                 break;
             default:
                 Console.WriteLine("Unknown command: " + action);
