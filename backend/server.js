@@ -69,6 +69,20 @@ function runSysControl(action, param = "") {
   });
 }
 
+function findProcessPid(exeName) {
+  return new Promise((resolve) => {
+    if (!exeName) return resolve(null);
+    exec(`tasklist /FI "IMAGENAME eq ${exeName}" /FO CSV /NH`, (err, stdout) => {
+      if (err || !stdout) return resolve(null);
+      const lines = stdout.trim().split("\n").filter(l => l.toLowerCase().includes(exeName.toLowerCase()));
+      if (lines.length === 0) return resolve(null);
+      const parts = lines[0].split(",").map(p => p.replace(/"/g, "").trim());
+      const pid = parseInt(parts[1], 10);
+      resolve(pid || null);
+    });
+  });
+}
+
 
 let games = [];
 let activeGame = null;
@@ -426,36 +440,18 @@ app.post("/play", async (req, res) => {
   console.log(`Abrindo: ${game.name}`);
 
   try {
-    let pid = null;
     let exeName = null;
+    let steamId = null;
 
     if (game.extension === ".lnk") {
       const shortcut = await resolveShortcut(game.file);
-      let targetExe = shortcut && shortcut.target && fs.existsSync(shortcut.target) ? shortcut.target : null;
-      let targetCwd = shortcut && shortcut.workingDir ? shortcut.workingDir : (targetExe ? path.dirname(targetExe) : null);
-      let targetArgs = shortcut && shortcut.args ? shortcut.args.trim().split(/\s+/).filter(Boolean) : [];
-
-      if (targetExe && targetExe.toLowerCase().endsWith(".exe")) {
-        exeName = path.basename(targetExe);
-        const child = spawn(targetExe, targetArgs, {
-          detached: true,
-          stdio: "ignore",
-          cwd: targetCwd || path.dirname(targetExe)
-        });
-        child.unref();
-        pid = child.pid;
+      if (shortcut && shortcut.target) {
+        exeName = path.basename(shortcut.target);
       } else {
         exeName = path.basename(game.file, ".lnk") + ".exe";
-        const child = spawn("cmd.exe", ["/c", "start", '""', game.file], {
-          detached: true,
-          stdio: "ignore",
-          cwd: path.dirname(game.file)
-        });
-        child.unref();
-        pid = child.pid;
       }
+      exec(`cmd /c start "" "${game.file}"`, { cwd: path.dirname(game.file) });
     } else if (game.extension === ".url") {
-      let steamId = null;
       try {
         const content = fs.readFileSync(game.file, "utf-8");
         const match = content.match(/steam:\/\/rungameid\/(\d+)/i);
@@ -463,25 +459,11 @@ app.post("/play", async (req, res) => {
       } catch {}
 
       exeName = path.basename(game.file, ".url") + ".exe";
-      game.steamId = steamId;
-
-      const child = spawn("cmd.exe", ["/c", "start", '""', game.file], {
-        detached: true,
-        stdio: "ignore",
-        cwd: path.dirname(game.file)
-      });
-      child.unref();
-      pid = child.pid;
+      exec(`cmd /c start "" "${game.file}"`, { cwd: path.dirname(game.file) });
     } else {
       // Executável direto (.exe)
       exeName = path.basename(game.file);
-      const child = spawn(game.file, [], {
-        detached: true,
-        stdio: "ignore",
-        cwd: path.dirname(game.file)
-      });
-      child.unref();
-      pid = child.pid;
+      exec(`cmd /c start "" "${game.file}"`, { cwd: path.dirname(game.file) });
     }
 
     activeGame = {
@@ -490,13 +472,24 @@ app.post("/play", async (req, res) => {
       file: game.file,
       extension: game.extension,
       cover: game.cover,
-      pid: pid,
+      pid: null,
       exeName: exeName,
-      steamId: game.steamId || null,
+      steamId: steamId,
       startedAt: new Date().toISOString()
     };
 
-    console.log(`Jogo iniciado: ${game.name} (PID: ${pid}, Executável: ${exeName})`);
+    // Tenta detectar o PID do processo nos primeiros segundos
+    setTimeout(async () => {
+      if (activeGame && activeGame.id === game.id && !activeGame.pid && exeName) {
+        const detectedPid = await findProcessPid(exeName);
+        if (detectedPid && activeGame) {
+          activeGame.pid = detectedPid;
+          console.log(`PID detectado para ${activeGame.name}: ${detectedPid}`);
+        }
+      }
+    }, 1500);
+
+    console.log(`Jogo lançado com sucesso: ${game.name} (Executável: ${exeName})`);
 
     res.json({
       success: true,
@@ -517,11 +510,18 @@ app.post("/play", async (req, res) => {
 // =========================
 
 // Consulta jogo em execução
-app.get("/system/active-game", (req, res) => {
+app.get("/system/active-game", async (req, res) => {
+  if (activeGame && !activeGame.pid && activeGame.exeName) {
+    const detectedPid = await findProcessPid(activeGame.exeName);
+    if (detectedPid && activeGame) {
+      activeGame.pid = detectedPid;
+    }
+  }
   res.json({
     activeGame
   });
 });
+
 
 // Fechar ou encerrar jogo via taskkill
 app.post("/system/close-game", async (req, res) => {
