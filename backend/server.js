@@ -32,6 +32,7 @@ const COVER_FOLDER =
 
 
 let games = [];
+let activeGame = null;
 
 
 // cria pasta covers
@@ -348,153 +349,198 @@ app.get("/",(req,res)=>{
 
 
 // Lista jogos
-
-app.get("/games",(req,res)=>{
-
-
+app.get("/games", (req, res) => {
   res.json(
-
-    games.map(game=>({
-
-
-      id:game.id,
-
-
-      name:game.name,
-
-
-      cover:game.cover
-
-
+    games.map(game => ({
+      id: game.id,
+      name: game.name,
+      cover: game.cover,
+      extension: game.extension
     }))
-
   );
-
-
 });
-
-
-
-
 
 // Atualizar biblioteca
-
-app.post("/refresh",async(req,res)=>{
-
-
+app.post("/refresh", async (req, res) => {
   await loadGames();
-
-
   res.json({
-
-    success:true,
-
-    total:games.length
-
+    success: true,
+    total: games.length
   });
-
-
 });
-
-
-
-
 
 // =========================
 // ABRIR JOGO
 // =========================
 
-app.post("/play",(req,res)=>{
+app.post("/play", (req, res) => {
+  const { id } = req.body;
+  const game = games.find(g => g.id === id);
 
-
-  const {id} = req.body;
-
-
-
-  const game =
-    games.find(
-      g=>g.id === id
-    );
-
-
-
-  if(!game){
-
-
+  if (!game) {
     return res.status(404).json({
-
-      success:false,
-
-      message:"Jogo não encontrado"
-
+      success: false,
+      message: "Jogo não encontrado"
     });
-
-
   }
 
+  console.log(`Abrindo: ${game.name}`);
 
-
-  console.log(
-    `Abrindo: ${game.name}`
-  );
-
-
-
-  try{
-
-
-    if(
-      game.extension === ".lnk" ||
-      game.extension === ".url"
-    ){
-
-
-      exec(
-        `cmd /c start "" "${game.file}"`
-      );
-
-
-    }else{
-
-
-      exec(
-        `"${game.file}"`
-      );
-
-
+  try {
+    if (game.extension === ".lnk" || game.extension === ".url") {
+      exec(`cmd /c start "" "${game.file}"`);
+    } else {
+      exec(`"${game.file}"`);
     }
 
-
+    activeGame = {
+      id: game.id,
+      name: game.name,
+      file: game.file,
+      extension: game.extension,
+      cover: game.cover,
+      startedAt: new Date().toISOString()
+    };
 
     res.json({
-
-      success:true,
-
-      game:game.name
-
+      success: true,
+      game: game.name,
+      activeGame
     });
-
-
-
-  }catch(error){
-
-
+  } catch (error) {
     console.log(error);
-
-
     res.status(500).json({
-
-      success:false,
-
-      message:"Erro ao abrir jogo"
-
+      success: false,
+      message: "Erro ao abrir jogo"
     });
-
-
   }
-
-
 });
+
+// =========================
+// CONTROLE REMOTO DO SISTEMA
+// =========================
+
+// Consulta jogo em execução
+app.get("/system/active-game", (req, res) => {
+  res.json({
+    activeGame
+  });
+});
+
+// Fechar jogo atual (Alt+F4 ou taskkill forçado)
+app.post("/system/close-game", (req, res) => {
+  const { force } = req.body || {};
+  try {
+    if (force && activeGame && activeGame.extension === ".exe") {
+      const exeName = path.basename(activeGame.file);
+      exec(`taskkill /F /IM "${exeName}" /T`);
+    }
+
+    // Envia Alt+F4 para fechar janela do jogo ativo de forma limpa
+    exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'%{F4}\')"');
+
+    const closed = activeGame;
+    activeGame = null;
+
+    res.json({
+      success: true,
+      message: force ? "Processo finalizado com força." : "Comando Alt+F4 enviado.",
+      closed
+    });
+  } catch (error) {
+    console.error("Erro fechando jogo:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Limpar estado do jogo ativo manualmente
+app.post("/system/clear-active", (req, res) => {
+  activeGame = null;
+  res.json({ success: true });
+});
+
+// Controle de Volume do Windows
+app.post("/system/volume", (req, res) => {
+  const { action } = req.body || {};
+  try {
+    if (action === "up") {
+      exec('powershell -NoProfile -Command "$w = New-Object -ComObject WScript.Shell; 1..3 | ForEach-Object { $w.SendKeys([char]175) }"');
+    } else if (action === "down") {
+      exec('powershell -NoProfile -Command "$w = New-Object -ComObject WScript.Shell; 1..3 | ForEach-Object { $w.SendKeys([char]174) }"');
+    } else if (action === "mute") {
+      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"');
+    } else {
+      return res.status(400).json({ success: false, message: "Ação de volume inválida" });
+    }
+    res.json({ success: true, action });
+  } catch (error) {
+    console.error("Erro volume:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Controle de Mídia (Play/Pause, Next, Prev)
+app.post("/system/media", (req, res) => {
+  const { action } = req.body || {};
+  try {
+    if (action === "play_pause") {
+      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]179)"');
+    } else if (action === "next") {
+      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]176)"');
+    } else if (action === "prev") {
+      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]177)"');
+    } else {
+      return res.status(400).json({ success: false, message: "Ação de mídia inválida" });
+    }
+    res.json({ success: true, action });
+  } catch (error) {
+    console.error("Erro mídia:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Teclas de Ação Rápida (Alt+Tab, Esc, Enter)
+app.post("/system/key", (req, res) => {
+  const { key } = req.body || {};
+  try {
+    if (key === "alttab") {
+      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'%{TAB}\')"');
+    } else if (key === "escape") {
+      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'{ESC}\')"');
+    } else if (key === "enter") {
+      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'{ENTER}\')"');
+    } else {
+      return res.status(400).json({ success: false, message: "Tecla inválida" });
+    }
+    res.json({ success: true, key });
+  } catch (error) {
+    console.error("Erro tecla:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Controle de Energia (Suspender, Desligar, Reiniciar, Cancelar)
+app.post("/system/power", (req, res) => {
+  const { action } = req.body || {};
+  try {
+    if (action === "sleep") {
+      exec("rundll32.exe powrprof.dll,SetSuspendState 0,1,0");
+    } else if (action === "shutdown") {
+      exec('shutdown /s /t 30 /c "GameLauncher: Desligando PC em 30s"');
+    } else if (action === "restart") {
+      exec('shutdown /r /t 30 /c "GameLauncher: Reiniciando PC em 30s"');
+    } else if (action === "cancel") {
+      exec("shutdown /a");
+    } else {
+      return res.status(400).json({ success: false, message: "Ação de energia inválida" });
+    }
+    res.json({ success: true, action });
+  } catch (error) {
+    console.error("Erro energia:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 
 
 

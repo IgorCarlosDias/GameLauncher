@@ -16,8 +16,13 @@ Com o GameLauncher, basta acessar uma página pelo celular, escolher o jogo e in
 ✅ Suporte para atalhos do Windows `.lnk`  
 ✅ Suporte para atalhos de internet `.url`  
 ✅ Execução remota dos jogos pela rede local  
-✅ Interface responsiva para celular  
-✅ Busca de jogos  
+✅ Interface responsiva para celular e TV estilo console  
+✅ Suporte PWA (Adicione à tela inicial com abertura em tela cheia)  
+✅ Feedback tátil (vibração tátil / haptics) no celular  
+✅ Controle Remoto integrado: Volume (+/-/Mudo), Mídia, Alt+Tab, Esc, Enter  
+✅ Gerenciamento de Energia: Suspender e Desligar PC remotamente com aviso prévio  
+✅ Banner "Jogando Agora" com timer em tempo real e botão para fechar o jogo (Alt+F4)  
+✅ Filtros rápidos por tipo (.exe, atalho, Steam/URL) e busca em tempo real  
 ✅ Download automático das capas dos jogos  
 ✅ Integração com SteamGridDB para capas estilo Steam  
 

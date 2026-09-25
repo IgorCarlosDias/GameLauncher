@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="50%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#6366f1" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="#0d1322"/>
+  <g filter="url(#glow)">
+    <!-- Controller Body -->
+    <path d="M168 140 C110 140 68 185 68 250 C68 318 108 380 152 380 C175 380 196 358 214 328 C232 298 280 298 298 328 C316 358 337 380 360 380 C404 380 444 318 444 250 C444 185 402 140 344 140 Z" fill="url(#bgGrad)"/>
+    <!-- D-Pad -->
+    <path d="M152 210 h24 v24 h24 v24 h-24 v24 h-24 v-24 h-24 v-24 h24 Z" fill="#0d1322"/>
+    <!-- Action Buttons -->
+    <circle cx="332" cy="226" r="13" fill="#0d1322"/>
+    <circle cx="362" cy="254" r="13" fill="#0d1322"/>
+    <circle cx="302" cy="254" r="13" fill="#0d1322"/>
+    <circle cx="332" cy="282" r="13" fill="#0d1322"/>
+    <!-- Center Buttons -->
+    <ellipse cx="230" cy="245" rx="14" ry="7" transform="rotate(-25 230 245)" fill="#0d1322"/>
+    <ellipse cx="282" cy="245" rx="14" ry="7" transform="rotate(25 282 245)" fill="#0d1322"/>
+    <!-- Grips Accent -->
+    <path d="M110 320 C120 345 135 365 152 370" stroke="#ffffff" stroke-opacity="0.3" stroke-width="6" stroke-linecap="round" fill="none"/>
+    <path d="M402 320 C392 345 377 365 360 370" stroke="#ffffff" stroke-opacity="0.3" stroke-width="6" stroke-linecap="round" fill="none"/>
+  </g>
+</svg>

@@ -5,6 +5,8 @@
 .env
 backend/.env
 frontend/.env
+*.sqlite
+backend/database.sqlite
 
 
 # =========================
