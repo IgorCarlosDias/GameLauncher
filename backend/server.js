@@ -450,7 +450,6 @@ app.post("/play", async (req, res) => {
       } else {
         exeName = path.basename(game.file, ".lnk") + ".exe";
       }
-      exec(`cmd /c start "" "${game.file}"`, { cwd: path.dirname(game.file) });
     } else if (game.extension === ".url") {
       try {
         const content = fs.readFileSync(game.file, "utf-8");
@@ -459,12 +458,19 @@ app.post("/play", async (req, res) => {
       } catch {}
 
       exeName = path.basename(game.file, ".url") + ".exe";
-      exec(`cmd /c start "" "${game.file}"`, { cwd: path.dirname(game.file) });
     } else {
       // Executável direto (.exe)
       exeName = path.basename(game.file);
+    }
+
+    // Inicia o jogo através do Windows Desktop Shell (Shell.Application) forçando exibição na tela (SW_SHOWNORMAL)
+    try {
+      await runSysControl("launch", `"${game.file}"`);
+    } catch (launchErr) {
+      console.warn("Fallback para cmd start:", launchErr.message);
       exec(`cmd /c start "" "${game.file}"`, { cwd: path.dirname(game.file) });
     }
+
 
     activeGame = {
       id: game.id,

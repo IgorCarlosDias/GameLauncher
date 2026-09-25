@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -92,6 +93,40 @@ class Program {
         } catch { }
     }
 
+    static void Launch(string filePath) {
+        if (string.IsNullOrEmpty(filePath)) return;
+        try {
+            Type shellType = Type.GetTypeFromProgID("Shell.Application");
+            if (shellType != null) {
+                object shell = Activator.CreateInstance(shellType);
+                string dir = Path.GetDirectoryName(filePath);
+                shellType.InvokeMember("ShellExecute",
+                    System.Reflection.BindingFlags.InvokeMethod,
+                    null, shell, new object[] { filePath, "", dir ?? "", "open", 1 });
+                Console.WriteLine("Launched via Shell.Application");
+                return;
+            }
+        } catch (Exception ex) {
+            Console.WriteLine("Shell.Application error: " + ex.Message);
+        }
+
+        try {
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = filePath;
+            psi.UseShellExecute = true;
+            psi.WindowStyle = ProcessWindowStyle.Normal;
+            string dir = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) {
+                psi.WorkingDirectory = dir;
+            }
+            Process.Start(psi);
+            Console.WriteLine("Launched via Process.Start");
+        } catch (Exception ex) {
+            Console.WriteLine("Error: " + ex.Message);
+        }
+    }
+
+
     static void Main(string[] args) {
         if (args.Length == 0) return;
         string action = args[0].ToLowerInvariant();
@@ -149,6 +184,12 @@ class Program {
                 break;
             case "killforeground":
                 KillForeground();
+                break;
+            case "launch":
+                if (args.Length > 1) {
+                    string fullPath = string.Join(" ", args, 1, args.Length - 1).Trim('"');
+                    Launch(fullPath);
+                }
                 break;
             default:
                 Console.WriteLine("Unknown command: " + action);
