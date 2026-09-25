@@ -321,45 +321,39 @@ async function loadGames(){
 
 
 
-    const cover =
-      await downloadCover(name);
-
-
+    let resolvedExe = null;
+    if (ext === ".lnk") {
+      const sc = await resolveShortcut(file);
+      if (sc && sc.target) {
+        resolvedExe = path.basename(sc.target);
+      } else {
+        resolvedExe = name + ".exe";
+      }
+    } else if (ext === ".url") {
+      resolvedExe = name + ".exe";
+    } else {
+      resolvedExe = path.basename(file);
+    }
 
     games.push({
-
       id: games.length + 1,
-
-      name:name,
-
-      file:file,
-
-      extension:ext,
-
-      cover:cover
-
+      name: name,
+      file: file,
+      extension: ext,
+      cover: cover,
+      resolvedExe: resolvedExe
     });
-
-
   }
-
-
 
   games.sort(
     (a,b)=>
       a.name.localeCompare(b.name)
   );
 
-
-
   console.log(
     `${games.length} jogos encontrados.`
   );
-
-
 }
-
-
 
 // =========================
 // START LOAD
@@ -367,39 +361,22 @@ async function loadGames(){
 
 loadGames();
 
-
-
-
 // =========================
 // ROTAS
 // =========================
-
 
 app.use(
   "/covers",
   express.static(COVER_FOLDER)
 );
 
-
-
 // Status
-
 app.get("/",(req,res)=>{
-
-
   res.json({
-
     status:"online",
-
     games:games.length
-
   });
-
-
 });
-
-
-
 
 // Lista jogos
 app.get("/games", (req, res) => {
@@ -408,10 +385,12 @@ app.get("/games", (req, res) => {
       id: game.id,
       name: game.name,
       cover: game.cover,
-      extension: game.extension
+      extension: game.extension,
+      resolvedExe: game.resolvedExe
     }))
   );
 });
+
 
 // Atualizar biblioteca
 app.post("/refresh", async (req, res) => {
@@ -531,44 +510,68 @@ app.get("/system/active-game", async (req, res) => {
 
 // Fechar ou encerrar jogo via taskkill
 app.post("/system/close-game", async (req, res) => {
-  const { force = true } = req.body || {};
+  const { force = true, id, exeName: customExe } = req.body || {};
   const current = activeGame;
+  const imTargets = new Set();
+  const pidTargets = new Set();
 
-  try {
-    if (current) {
-      // 1. Mata pelo PID registrado
-      if (current.pid) {
-        await runSysControl("killpid", current.pid);
-        exec(`taskkill /F /PID ${current.pid} /T`);
-      }
-
-      // 2. Mata pelo nome do executável registrado
-      if (current.exeName) {
-        await runSysControl("killname", `"${current.exeName}"`);
-        exec(`taskkill /F /IM "${current.exeName}" /T`);
-      }
-    }
-
-    // 3. Mata processo da janela atualmente em primeiro plano
-    await runSysControl("killforeground");
-
-    // 4. Se não for forçado (modo suave), envia Alt+F4
-    if (!force) {
-      await runSysControl("altf4");
-    }
-
-    activeGame = null;
-
-    res.json({
-      success: true,
-      message: current ? `Jogo ${current.name} encerrado via taskkill.` : "Processo encerrado com sucesso via taskkill.",
-      closed: current
-    });
-  } catch (error) {
-    console.error("Erro fechando jogo:", error);
-    res.status(500).json({ success: false, message: error.message });
+  // 1. Alvos do activeGame atual
+  if (current) {
+    if (current.pid) pidTargets.add(current.pid);
+    if (current.exeName) imTargets.add(current.exeName);
   }
+
+  // 2. Alvo específico por ID
+  if (id) {
+    const g = games.find(item => item.id === id);
+    if (g && g.resolvedExe) imTargets.add(g.resolvedExe);
+  }
+
+  // 3. Alvo específico por nome
+  if (customExe) {
+    imTargets.add(customExe);
+  }
+
+  console.log(`[Taskkill] Executando encerramento. PIDs:`, Array.from(pidTargets), `Executáveis:`, Array.from(imTargets));
+
+  // Executa taskkill por PID
+  for (const pid of pidTargets) {
+    exec(`taskkill /F /PID ${pid} /T`, (err) => {
+      if (err) console.log(`Taskkill PID ${pid} aviso:`, err.message);
+      else console.log(`PID ${pid} finalizado.`);
+    });
+  }
+
+  // Executa taskkill por Nome de Executável
+  for (const im of imTargets) {
+    exec(`taskkill /F /IM "${im}" /T`, (err) => {
+      if (err) console.log(`Taskkill IM ${im} aviso:`, err.message);
+      else console.log(`Executável ${im} finalizado.`);
+    });
+  }
+
+  // Tenta fechar janela ativa em primeiro plano
+  try {
+    await runSysControl("killforeground");
+  } catch {}
+
+  // Envia Alt+F4 se não for fechamento forçado
+  if (!force) {
+    try {
+      await runSysControl("altf4");
+    } catch {}
+  }
+
+  const closed = activeGame;
+  activeGame = null;
+
+  res.json({
+    success: true,
+    message: current ? `Jogo ${current.name} encerrado via taskkill.` : "Comando de encerramento enviado via taskkill.",
+    closed
+  });
 });
+
 
 
 // Limpar estado do jogo ativo manualmente

@@ -127,11 +127,11 @@ export default function App() {
   }
 
   // Encerrar jogo atual (com taskkill)
-  async function closeActiveGame(force = true) {
+  async function closeActiveGame(force = true, targetParams = {}) {
     triggerHaptic(50);
     showToast(force ? "Encerrando processo com taskkill..." : "Enviando Alt+F4...", "info");
     try {
-      const res = await axios.post(`${API}/system/close-game`, { force });
+      const res = await axios.post(`${API}/system/close-game`, { force, ...targetParams });
       showToast(res.data?.message || (force ? "Jogo encerrado via taskkill" : "Alt+F4 enviado ao PC"), "success");
       setActiveGame(null);
       setActiveSeconds(0);
@@ -140,6 +140,7 @@ export default function App() {
       showToast("Falha ao encerrar jogo", "error");
     }
   }
+
 
   // Dispensar barra de jogo ativo sem mandar comando
   async function dismissActiveGame() {
@@ -529,13 +530,14 @@ export default function App() {
                               className="btn btn-card-kill"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                closeActiveGame(true);
+                                closeActiveGame(true, { id: game.id, exeName: game.resolvedExe });
                               }}
                               title="Encerrar processo do jogo via taskkill"
                             >
                               🛑 Fechar
                             </button>
                           )}
+
                         </div>
                       </div>
                     </article>
