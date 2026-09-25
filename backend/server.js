@@ -61,13 +61,13 @@ const SYSCONTROL_BIN =
   path.join(__dirname, "syscontrol.exe");
 
 function runSysControl(action, param = "") {
-  return new Promise((resolve, reject) => {
-    exec(`"${SYSCONTROL_BIN}" ${action} ${param}`, (err, stdout) => {
-      if (err) return reject(err);
-      resolve(stdout);
+  return new Promise((resolve) => {
+    exec(`"${SYSCONTROL_BIN}" ${action} ${param}`, (err, stdout, stderr) => {
+      resolve(stdout || stderr || "");
     });
   });
 }
+
 
 function findProcessPid(exeName) {
   return new Promise((resolve) => {
@@ -539,21 +539,33 @@ app.post("/system/close-game", async (req, res) => {
 
   console.log(`[Taskkill] Executando encerramento. PIDs:`, Array.from(pidTargets), `Executáveis:`, Array.from(imTargets));
 
-  // Executa taskkill por PID
+  // Executa encerramento por PID (syscontrol .NET Kill + taskkill nativo + PowerShell)
   for (const pid of pidTargets) {
-    exec(`taskkill /F /PID ${pid} /T`, (err) => {
-      if (err) console.log(`Taskkill PID ${pid} aviso:`, err.message);
-      else console.log(`PID ${pid} finalizado.`);
+    runSysControl("killpid", pid);
+    exec(`taskkill /F /PID ${pid} /T`, (err, stdout, stderr) => {
+      if (err) {
+        console.log(`[Taskkill PID ${pid}] Aviso:`, stderr ? stderr.trim() : err.message);
+        exec(`powershell -NoProfile -Command "Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue"`);
+      } else {
+        console.log(`[Taskkill PID ${pid}] Finalizado com sucesso.`);
+      }
     });
   }
 
-  // Executa taskkill por Nome de Executável
+  // Executa encerramento por Nome (syscontrol .NET KillAll + taskkill nativo + PowerShell)
   for (const im of imTargets) {
-    exec(`taskkill /F /IM "${im}" /T`, (err) => {
-      if (err) console.log(`Taskkill IM ${im} aviso:`, err.message);
-      else console.log(`Executável ${im} finalizado.`);
+    runSysControl("killname", `"${im}"`);
+    exec(`taskkill /F /IM "${im}" /T`, (err, stdout, stderr) => {
+      if (err) {
+        console.log(`[Taskkill IM ${im}] Aviso:`, stderr ? stderr.trim() : err.message);
+        const baseName = im.replace(/\.exe$/i, "");
+        exec(`powershell -NoProfile -Command "Get-Process -Name '${baseName}' -ErrorAction SilentlyContinue | Stop-Process -Force"`);
+      } else {
+        console.log(`[Taskkill IM ${im}] Finalizado com sucesso.`);
+      }
     });
   }
+
 
   // Tenta fechar janela ativa em primeiro plano
   try {

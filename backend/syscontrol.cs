@@ -55,6 +55,10 @@ class Program {
     static void KillPid(int pid) {
         if (pid <= 4) return;
         try {
+            Process proc = Process.GetProcessById(pid);
+            proc.Kill();
+        } catch { }
+        try {
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = "taskkill.exe";
             psi.Arguments = "/F /PID " + pid + " /T";
@@ -67,16 +71,31 @@ class Program {
 
     static void KillName(string name) {
         if (string.IsNullOrEmpty(name)) return;
+        string cleanName = name.Trim().Trim('"');
+        string baseName = cleanName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? cleanName.Substring(0, cleanName.Length - 4)
+            : cleanName;
+
+        try {
+            Process[] procs = Process.GetProcessesByName(baseName);
+            for (int i = 0; i < procs.Length; i++) {
+                try {
+                    procs[i].Kill();
+                } catch { }
+            }
+        } catch { }
+
         try {
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = "taskkill.exe";
-            psi.Arguments = "/F /IM \"" + name + "\" /T";
+            psi.Arguments = "/F /IM \"" + cleanName + "\" /T";
             psi.CreateNoWindow = true;
             psi.UseShellExecute = false;
             Process p = Process.Start(psi);
             if (p != null) p.WaitForExit(2000);
         } catch { }
     }
+
 
     static void KillForeground() {
         IntPtr hwnd = GetForegroundWindow();
@@ -179,9 +198,11 @@ class Program {
                 break;
             case "killname":
                 if (args.Length > 1) {
-                    KillName(args[1]);
+                    string fullProcName = string.Join(" ", args, 1, args.Length - 1).Trim().Trim('"');
+                    KillName(fullProcName);
                 }
                 break;
+
             case "killforeground":
                 KillForeground();
                 break;
