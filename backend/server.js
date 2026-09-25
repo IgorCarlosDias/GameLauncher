@@ -335,6 +335,10 @@ async function loadGames(){
       resolvedExe = path.basename(file);
     }
 
+
+    const cover = await downloadCover(name);
+
+
     games.push({
       id: games.length + 1,
       name: name,
@@ -343,6 +347,7 @@ async function loadGames(){
       cover: cover,
       resolvedExe: resolvedExe
     });
+
   }
 
   games.sort(
