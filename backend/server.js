@@ -15,6 +15,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Logger de requisições
+app.use((req, res, next) => {
+  console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
+  next();
+});
+
 
 // =========================
 // CONFIGURAÇÕES
@@ -29,6 +35,18 @@ const SERVER_IP = process.env.SERVER_IP || "localhost";
 
 const COVER_FOLDER =
   path.join(__dirname, "covers");
+
+const SYSCONTROL_BIN =
+  path.join(__dirname, "syscontrol.exe");
+
+function runSysControl(action, param = "") {
+  return new Promise((resolve, reject) => {
+    exec(`"${SYSCONTROL_BIN}" ${action} ${param}`, (err, stdout) => {
+      if (err) return reject(err);
+      resolve(stdout);
+    });
+  });
+}
 
 
 let games = [];
@@ -428,7 +446,7 @@ app.get("/system/active-game", (req, res) => {
 });
 
 // Fechar jogo atual (Alt+F4 ou taskkill forçado)
-app.post("/system/close-game", (req, res) => {
+app.post("/system/close-game", async (req, res) => {
   const { force } = req.body || {};
   try {
     if (force && activeGame && activeGame.extension === ".exe") {
@@ -436,8 +454,8 @@ app.post("/system/close-game", (req, res) => {
       exec(`taskkill /F /IM "${exeName}" /T`);
     }
 
-    // Envia Alt+F4 para fechar janela do jogo ativo de forma limpa
-    exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'%{F4}\')"');
+    // Envia Alt+F4 nativo para fechar janela do jogo
+    await runSysControl("altf4");
 
     const closed = activeGame;
     activeGame = null;
@@ -460,15 +478,15 @@ app.post("/system/clear-active", (req, res) => {
 });
 
 // Controle de Volume do Windows
-app.post("/system/volume", (req, res) => {
+app.post("/system/volume", async (req, res) => {
   const { action } = req.body || {};
   try {
     if (action === "up") {
-      exec('powershell -NoProfile -Command "$w = New-Object -ComObject WScript.Shell; 1..3 | ForEach-Object { $w.SendKeys([char]175) }"');
+      await runSysControl("volup", "3");
     } else if (action === "down") {
-      exec('powershell -NoProfile -Command "$w = New-Object -ComObject WScript.Shell; 1..3 | ForEach-Object { $w.SendKeys([char]174) }"');
+      await runSysControl("voldown", "3");
     } else if (action === "mute") {
-      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]173)"');
+      await runSysControl("volmute");
     } else {
       return res.status(400).json({ success: false, message: "Ação de volume inválida" });
     }
@@ -480,15 +498,15 @@ app.post("/system/volume", (req, res) => {
 });
 
 // Controle de Mídia (Play/Pause, Next, Prev)
-app.post("/system/media", (req, res) => {
+app.post("/system/media", async (req, res) => {
   const { action } = req.body || {};
   try {
     if (action === "play_pause") {
-      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]179)"');
+      await runSysControl("playpause");
     } else if (action === "next") {
-      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]176)"');
+      await runSysControl("next");
     } else if (action === "prev") {
-      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys([char]177)"');
+      await runSysControl("prev");
     } else {
       return res.status(400).json({ success: false, message: "Ação de mídia inválida" });
     }
@@ -500,15 +518,15 @@ app.post("/system/media", (req, res) => {
 });
 
 // Teclas de Ação Rápida (Alt+Tab, Esc, Enter)
-app.post("/system/key", (req, res) => {
+app.post("/system/key", async (req, res) => {
   const { key } = req.body || {};
   try {
     if (key === "alttab") {
-      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'%{TAB}\')"');
+      await runSysControl("alttab");
     } else if (key === "escape") {
-      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'{ESC}\')"');
+      await runSysControl("escape");
     } else if (key === "enter") {
-      exec('powershell -NoProfile -Command "(New-Object -ComObject WScript.Shell).SendKeys(\'{ENTER}\')"');
+      await runSysControl("enter");
     } else {
       return res.status(400).json({ success: false, message: "Tecla inválida" });
     }
@@ -518,6 +536,7 @@ app.post("/system/key", (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
 
 // Controle de Energia (Suspender, Desligar, Reiniciar, Cancelar)
 app.post("/system/power", (req, res) => {
