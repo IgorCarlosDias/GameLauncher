@@ -42,6 +42,8 @@ export default function App() {
   const [games, setGames] = useState([]);
   const [search, setSearch] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("all"); // 'all' | 'fav' | '.exe' | '.lnk' | '.url'
+  const [sortBy, setSortBy] = useState("default"); // 'default' | 'recent' | 'playtime' | 'az'
+  const [viewMode, setViewMode] = useState("poster"); // 'poster' | 'list'
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -731,12 +733,40 @@ export default function App() {
     return [...games]
       .filter((g) => g.lastPlayed)
       .sort((a, b) => new Date(b.lastPlayed).getTime() - new Date(a.lastPlayed).getTime())
-      .slice(0, 4);
+      .slice(0, 6);
   }, [games]);
 
-  // Filtragem dos jogos
+  // Estatísticas gerais da biblioteca do jogador
+  const libraryStats = useMemo(() => {
+    const totalPlayTimeSec = games.reduce((acc, g) => acc + (Number(g.playTime) || 0), 0);
+    const topGame = [...games]
+      .filter((g) => (g.playTime || 0) > 0 || (g.playCount || 0) > 0)
+      .sort((a, b) => (b.playTime || 0) - (a.playTime || 0))[0] || null;
+
+    return {
+      totalGames: games.length,
+      totalPlayTimeLabel: formatPlayTime(totalPlayTimeSec) || "0m",
+      topGame,
+      favCount: games.filter((g) => g.favorite).length,
+    };
+  }, [games]);
+
+  // Jogo em Destaque (Hero Banner): Jogo ativo, ou mais recente, ou favorito, ou o primeiro
+  const heroGame = useMemo(() => {
+    if (activeGame) {
+      const matched = games.find((g) => g.id === activeGame.id);
+      if (matched) return { ...matched, isPlayingNow: true };
+    }
+    if (recentGames.length > 0) return recentGames[0];
+    const fav = games.find((g) => g.favorite && g.cover);
+    if (fav) return fav;
+    const withCover = games.find((g) => g.cover);
+    return withCover || games[0] || null;
+  }, [activeGame, games, recentGames]);
+
+  // Filtragem e ordenação dinâmica dos jogos
   const filteredGames = useMemo(() => {
-    return games.filter((game) => {
+    const result = games.filter((game) => {
       const matchesSearch = game.name.toLowerCase().includes(search.toLowerCase());
       if (!matchesSearch) return false;
 
@@ -747,7 +777,24 @@ export default function App() {
       if (selectedFilter === ".url") return game.extension === ".url";
       return true;
     });
-  }, [games, search, selectedFilter]);
+
+    return result.sort((a, b) => {
+      if (sortBy === "recent") {
+        const timeA = a.lastPlayed ? new Date(a.lastPlayed).getTime() : 0;
+        const timeB = b.lastPlayed ? new Date(b.lastPlayed).getTime() : 0;
+        return timeB - timeA;
+      }
+      if (sortBy === "playtime") {
+        return (b.playTime || 0) - (a.playTime || 0);
+      }
+      if (sortBy === "az") {
+        return a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+      }
+      // default: favoritos primeiro, depois ordem alfabética
+      if (a.favorite !== b.favorite) return (b.favorite ? 1 : 0) - (a.favorite ? 1 : 0);
+      return a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+    });
+  }, [games, search, selectedFilter, sortBy]);
 
   // Contadores para os filtros
   const counts = useMemo(() => {
@@ -879,7 +926,137 @@ export default function App() {
       )}
 
       <main className="container">
-        {/* Barra de Pesquisa e Filtros */}
+        {/* Hero Spotlight Banner com Ambient Blur de Console (Exibido no Início quando não está buscando) */}
+        {!search && selectedFilter === "all" && heroGame && (
+          <section className="hero-spotlight">
+            {heroGame.cover && (
+              <div
+                className="hero-ambient-glow"
+                style={{ backgroundImage: `url(${API}/covers/${heroGame.cover})` }}
+              />
+            )}
+            <div className="hero-content">
+              <div className="hero-poster-container">
+                {heroGame.cover ? (
+                  <img
+                    src={`${API}/covers/${heroGame.cover}`}
+                    alt={heroGame.name}
+                    className="hero-poster"
+                  />
+                ) : (
+                  <div className="hero-poster-placeholder">🎮</div>
+                )}
+                {heroGame.isPlayingNow && <span className="hero-badge-live">Ao Vivo</span>}
+              </div>
+
+              <div className="hero-info">
+                <div className="hero-tags-row">
+                  <span className={`hero-status-pill ${heroGame.isPlayingNow ? "live" : ""}`}>
+                    {heroGame.isPlayingNow
+                      ? "🔥 EM EXECUÇÃO NO PC"
+                      : heroGame.favorite
+                      ? "⭐ JOGO FAVORITO"
+                      : "🏆 DESTAQUE DA BIBLIOTECA"}
+                  </span>
+                  <span className="hero-ext-pill">
+                    {heroGame.extension === ".url" ? "Steam" : heroGame.extension === ".lnk" ? "Atalho" : "PC Game"}
+                  </span>
+                </div>
+
+                <h2 className="hero-title">{heroGame.name}</h2>
+
+                <div className="hero-stats">
+                  <span className="hero-stat-item">
+                    ⏱️ {formatPlayTime(heroGame.playTime) || "0h jogadas"}
+                  </span>
+                  {heroGame.playCount > 0 && (
+                    <span className="hero-stat-item">
+                      🎮 {heroGame.playCount} {heroGame.playCount === 1 ? "sessão" : "sessões"}
+                    </span>
+                  )}
+                  {heroGame.lastPlayed && (
+                    <span className="hero-stat-item dim">
+                      🗓️ {new Date(heroGame.lastPlayed).toLocaleDateString("pt-BR")}
+                    </span>
+                  )}
+                </div>
+
+                <div className="hero-actions">
+                  <button
+                    className={`btn btn-hero-play ${launchingId === heroGame.id ? "launching" : ""}`}
+                    onClick={() => playGame(heroGame)}
+                    disabled={launchingId === heroGame.id}
+                  >
+                    {heroGame.isPlayingNow ? "▶ Em Jogo" : "▶ Jogar Agora"}
+                  </button>
+
+                  <button
+                    className={`btn btn-hero-icon ${heroGame.favorite ? "active" : ""}`}
+                    onClick={(e) => toggleFavorite(e, heroGame)}
+                    title={heroGame.favorite ? "Remover dos Favoritos" : "Favoritar"}
+                  >
+                    {heroGame.favorite ? "★" : "☆"}
+                  </button>
+
+                  <button
+                    className="btn btn-hero-icon"
+                    onClick={(e) => openEditModal(e, heroGame)}
+                    title="Editar capa ou nome"
+                  >
+                    ✏️
+                  </button>
+
+                  {heroGame.isPlayingNow && (
+                    <button
+                      className="btn btn-close-soft"
+                      onClick={() => closeActiveGame(false)}
+                      title="Fechar suavemente (Alt+F4)"
+                    >
+                      ✕ Alt+F4
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* Gamer Profile Stats Strip */}
+        {!search && selectedFilter === "all" && games.length > 0 && (
+          <section className="gamer-profile-strip">
+            <div className="profile-stat-card">
+              <span className="profile-stat-icon">🎮</span>
+              <div className="profile-stat-text">
+                <strong className="profile-stat-number">{libraryStats.totalGames}</strong>
+                <span className="profile-stat-sub">Jogos Instalados</span>
+              </div>
+            </div>
+
+            <div className="profile-stat-card">
+              <span className="profile-stat-icon">⏱️</span>
+              <div className="profile-stat-text">
+                <strong className="profile-stat-number">{libraryStats.totalPlayTimeLabel}</strong>
+                <span className="profile-stat-sub">Tempo Total no Sofá</span>
+              </div>
+            </div>
+
+            {libraryStats.topGame && (
+              <div
+                className="profile-stat-card clickable"
+                onClick={() => playGame(libraryStats.topGame)}
+                title="Clique para jogar o título mais jogado"
+              >
+                <span className="profile-stat-icon">👑</span>
+                <div className="profile-stat-text">
+                  <strong className="profile-stat-number truncate">{libraryStats.topGame.name}</strong>
+                  <span className="profile-stat-sub">Mais Jogado ({formatPlayTime(libraryStats.topGame.playTime) || "1x"})</span>
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Barra de Pesquisa, Filtros e Opções de Exibição */}
         <section className="search-section">
           <div className="search-wrapper">
             <span className="search-icon">🔍</span>
@@ -903,65 +1080,110 @@ export default function App() {
             )}
           </div>
 
-          {/* Filtros em Pílula */}
-          <div className="filter-pills">
-            <button
-              className={`pill ${selectedFilter === "all" ? "active" : ""}`}
-              onClick={() => {
-                triggerHaptic(15);
-                setSelectedFilter("all");
-              }}
-            >
-              Todos ({counts.all})
-            </button>
-            {counts.fav > 0 && (
+          {/* Filtros em Pílula + Ordenação e Alternador de Visão */}
+          <div className="filters-and-controls">
+            <div className="filter-pills">
               <button
-                className={`pill pill-fav ${selectedFilter === "fav" ? "active" : ""}`}
+                className={`pill ${selectedFilter === "all" ? "active" : ""}`}
                 onClick={() => {
                   triggerHaptic(15);
-                  setSelectedFilter("fav");
+                  setSelectedFilter("all");
                 }}
               >
-                ⭐ Favoritos ({counts.fav})
+                Todos ({counts.all})
               </button>
-            )}
-            {counts.exe > 0 && (
-              <button
-                className={`pill ${selectedFilter === ".exe" ? "active" : ""}`}
-                onClick={() => {
+              {counts.fav > 0 && (
+                <button
+                  className={`pill pill-fav ${selectedFilter === "fav" ? "active" : ""}`}
+                  onClick={() => {
+                    triggerHaptic(15);
+                    setSelectedFilter("fav");
+                  }}
+                >
+                  ⭐ Favoritos ({counts.fav})
+                </button>
+              )}
+              {counts.exe > 0 && (
+                <button
+                  className={`pill ${selectedFilter === ".exe" ? "active" : ""}`}
+                  onClick={() => {
+                    triggerHaptic(15);
+                    setSelectedFilter(".exe");
+                  }}
+                >
+                  Executáveis ({counts.exe})
+                </button>
+              )}
+              {counts.lnk > 0 && (
+                <button
+                  className={`pill ${selectedFilter === ".lnk" ? "active" : ""}`}
+                  onClick={() => {
+                    triggerHaptic(15);
+                    setSelectedFilter(".lnk");
+                  }}
+                >
+                  Atalhos ({counts.lnk})
+                </button>
+              )}
+              {counts.url > 0 && (
+                <button
+                  className={`pill ${selectedFilter === ".url" ? "active" : ""}`}
+                  onClick={() => {
+                    triggerHaptic(15);
+                    setSelectedFilter(".url");
+                  }}
+                >
+                  Steam / Web ({counts.url})
+                </button>
+              )}
+            </div>
+
+            {/* Controles de Ordenação e Grade/Lista */}
+            <div className="view-controls">
+              <select
+                className="sort-select"
+                value={sortBy}
+                onChange={(e) => {
                   triggerHaptic(15);
-                  setSelectedFilter(".exe");
+                  setSortBy(e.target.value);
                 }}
+                aria-label="Ordenar biblioteca"
               >
-                Executáveis ({counts.exe})
-              </button>
-            )}
-            {counts.lnk > 0 && (
-              <button
-                className={`pill ${selectedFilter === ".lnk" ? "active" : ""}`}
-                onClick={() => {
-                  triggerHaptic(15);
-                  setSelectedFilter(".lnk");
-                }}
-              >
-                Atalhos ({counts.lnk})
-              </button>
-            )}
-            {counts.url > 0 && (
-              <button
-                className={`pill ${selectedFilter === ".url" ? "active" : ""}`}
-                onClick={() => {
-                  triggerHaptic(15);
-                  setSelectedFilter(".url");
-                }}
-              >
-                Steam / Web ({counts.url})
-              </button>
-            )}
+                <option value="default">⭐ Destaques & Favoritos</option>
+                <option value="recent">⏱️ Mais Recentes</option>
+                <option value="playtime">🔥 Mais Jogados</option>
+                <option value="az">🔤 Nome (A-Z)</option>
+              </select>
+
+              <div className="view-mode-toggle">
+                <button
+                  className={`view-mode-btn ${viewMode === "poster" ? "active" : ""}`}
+                  onClick={() => {
+                    triggerHaptic(15);
+                    setViewMode("poster");
+                  }}
+                  title="Visualização em Grade de Posters"
+                  aria-label="Grade de Posters"
+                >
+                  ⊞
+                </button>
+                <button
+                  className={`view-mode-btn ${viewMode === "list" ? "active" : ""}`}
+                  onClick={() => {
+                    triggerHaptic(15);
+                    setViewMode("list");
+                  }}
+                  title="Visualização em Lista Compacta"
+                  aria-label="Lista Compacta"
+                >
+                  ☰
+                </button>
+              </div>
+            </div>
           </div>
         </section>
 
-        {/* Seção: Continuar Jogando (Recentes) */}
+        {/* Seção: Continuar Jogando (Recentes em Carrossel Horizontal) */}
         {!loading && !error && !search && selectedFilter === "all" && recentGames.length > 0 && (
           <section className="recent-section">
             <div className="section-heading">
@@ -1000,11 +1222,16 @@ export default function App() {
           </section>
         )}
 
-        {/* Estados de Carregamento e Erro */}
+        {/* Skeleton Shimmer Loading (Console Experience) */}
         {loading && (
-          <div className="state-feedback">
-            <div className="spinner"></div>
-            <p>Carregando biblioteca do PC...</p>
+          <div className="skeleton-grid">
+            {[1, 2, 3, 4, 5, 6].map((idx) => (
+              <div key={`skel-${idx}`} className="skeleton-card">
+                <div className="skeleton-cover shimmer"></div>
+                <div className="skeleton-title shimmer"></div>
+                <div className="skeleton-btn shimmer"></div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -1018,7 +1245,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Grade de Jogos */}
+        {/* Catálogo de Jogos (Posters Full-Bleed ou Lista Compacta) */}
         {!loading && !error && (
           <>
             {filteredGames.length === 0 ? (
@@ -1030,8 +1257,9 @@ export default function App() {
                   </button>
                 )}
               </div>
-            ) : (
-              <div className="grid">
+            ) : viewMode === "poster" ? (
+              /* MODO GRADE: POSTERS FULL-BLEED ESTILO CONSOLE */
+              <div className="grid poster-grid">
                 {filteredGames.map((game) => {
                   const isLaunching = launchingId === game.id;
                   const isCurrent = activeGame && activeGame.id === game.id;
@@ -1039,26 +1267,33 @@ export default function App() {
 
                   return (
                     <article
-                      className={`card ${isCurrent ? "current-running" : ""}`}
+                      className={`poster-card ${isCurrent ? "current-running" : ""}`}
                       key={game.id}
+                      onClick={() => playGame(game)}
                     >
-                      <div className="card-cover-container">
+                      <div className="poster-artwork-wrapper">
                         {game.cover ? (
                           <img
                             src={`${API}/covers/${game.cover}`}
                             alt={game.name}
                             loading="lazy"
-                            className="card-cover-image"
+                            className="poster-img"
                           />
                         ) : (
-                          <div className="no-cover">
+                          <div className="no-cover-poster">
                             <span className="no-cover-icon">🎮</span>
                             <span className="no-cover-text">{game.name}</span>
                           </div>
                         )}
 
-                        {/* Botões flutuantes no topo esquerdo: Favorito & Editar */}
-                        <div className="card-overlay-actions">
+                        {/* Degradê escuro sobreposto na parte inferior */}
+                        <div className="poster-gradient-overlay" />
+
+                        {/* Badges superiores em vidro translúcido */}
+                        <div
+                          className="card-overlay-actions"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <button
                             className={`card-icon-btn fav-btn ${game.favorite ? "active" : ""}`}
                             onClick={(e) => toggleFavorite(e, game)}
@@ -1075,7 +1310,6 @@ export default function App() {
                           </button>
                         </div>
 
-                        {/* Tag da extensão */}
                         <span className={`badge-ext badge-${game.extension?.replace(".", "")}`}>
                           {game.extension === ".url"
                             ? "Steam"
@@ -1084,56 +1318,134 @@ export default function App() {
                             : "Jogo"}
                         </span>
 
-                        {isCurrent && <span className="badge-running">Em Execução</span>}
-                      </div>
+                        {isCurrent && <span className="badge-running-pill">Em Execução</span>}
 
-                      <div className="card-info">
-                        <div className="card-title-group">
-                          <h2 title={game.name} className="game-title">
+                        {/* Conteúdo inferior integrado sobre o poster */}
+                        <div className="poster-bottom-details">
+                          <h3 title={game.name} className="poster-game-title">
                             {game.name}
-                          </h2>
-                          <div className="game-stats-line">
+                          </h3>
+
+                          <div className="poster-meta-row">
                             {playTimeLabel ? (
-                              <span className="stat-pill">⏱️ {playTimeLabel}</span>
+                              <span className="poster-stat-pill">⏱️ {playTimeLabel}</span>
                             ) : (
-                              <span className="stat-pill dim">Não jogado</span>
+                              <span className="poster-stat-pill dim">Não jogado</span>
                             )}
                             {game.playCount > 0 && (
-                              <span className="stat-pill dim">{game.playCount}x</span>
+                              <span className="poster-stat-pill dim">{game.playCount}x</span>
+                            )}
+                          </div>
+
+                          <div
+                            className="poster-btn-row"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              className={`btn btn-play-poster ${isLaunching ? "launching" : ""}`}
+                              onClick={() => playGame(game)}
+                              disabled={isLaunching}
+                            >
+                              {isLaunching ? (
+                                <>
+                                  <span className="btn-spinner"></span> Iniciando...
+                                </>
+                              ) : isCurrent ? (
+                                <>▶ Em Jogo</>
+                              ) : (
+                                <>▶ Jogar</>
+                              )}
+                            </button>
+
+                            {isCurrent && (
+                              <button
+                                className="btn btn-card-kill-compact"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  closeActiveGame(true, { id: game.id, exeName: game.resolvedExe });
+                                }}
+                                title="Encerrar processo do jogo imediatamente"
+                              >
+                                🛑
+                              </button>
                             )}
                           </div>
                         </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              /* MODO LISTA COMPACTA */
+              <div className="list-view-container">
+                {filteredGames.map((game) => {
+                  const isLaunching = launchingId === game.id;
+                  const isCurrent = activeGame && activeGame.id === game.id;
+                  const playTimeLabel = formatPlayTime(game.playTime);
 
-                        <div className="card-btn-row">
-                          <button
-                            className={`btn btn-play ${isLaunching ? "launching" : ""}`}
-                            onClick={() => playGame(game)}
-                            disabled={isLaunching}
-                          >
-                            {isLaunching ? (
-                              <>
-                                <span className="btn-spinner"></span> Iniciando...
-                              </>
-                            ) : isCurrent ? (
-                              <>▶ Em Jogo</>
-                            ) : (
-                              <>▶ Jogar</>
-                            )}
-                          </button>
+                  return (
+                    <article
+                      key={game.id}
+                      className={`list-item-card ${isCurrent ? "current-running" : ""}`}
+                      onClick={() => playGame(game)}
+                    >
+                      <div className="list-item-thumb-wrapper">
+                        {game.cover ? (
+                          <img
+                            src={`${API}/covers/${game.cover}`}
+                            alt={game.name}
+                            className="list-item-thumb"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="list-item-thumb placeholder">🎮</div>
+                        )}
+                        {isCurrent && <span className="list-live-dot" />}
+                      </div>
 
-                          {isCurrent && (
-                            <button
-                              className="btn btn-card-kill"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                closeActiveGame(true, { id: game.id, exeName: game.resolvedExe });
-                              }}
-                              title="Encerrar processo do jogo via Taskkill"
-                            >
-                              🛑 Fechar
-                            </button>
+                      <div className="list-item-main">
+                        <div className="list-item-title-row">
+                          <strong className="list-item-name">{game.name}</strong>
+                          <span className={`badge-ext-mini badge-${game.extension?.replace(".", "")}`}>
+                            {game.extension === ".url" ? "Steam" : game.extension === ".lnk" ? "Atalho" : "Exe"}
+                          </span>
+                        </div>
+                        <div className="list-item-meta-row">
+                          <span className="list-stat">
+                            {playTimeLabel ? `⏱️ ${playTimeLabel}` : "⏱️ Não jogado"}
+                          </span>
+                          {game.playCount > 0 && <span className="list-stat dim">• {game.playCount}x</span>}
+                          {game.lastPlayed && (
+                            <span className="list-stat dim">
+                              • {new Date(game.lastPlayed).toLocaleDateString("pt-BR")}
+                            </span>
                           )}
                         </div>
+                      </div>
+
+                      <div className="list-item-actions" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className={`btn-list-action ${game.favorite ? "active" : ""}`}
+                          onClick={(e) => toggleFavorite(e, game)}
+                          title="Favoritar"
+                        >
+                          {game.favorite ? "★" : "☆"}
+                        </button>
+                        <button
+                          className="btn-list-action"
+                          onClick={(e) => openEditModal(e, game)}
+                          title="Editar"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          className={`btn btn-list-play ${isLaunching ? "launching" : ""}`}
+                          onClick={() => playGame(game)}
+                          disabled={isLaunching}
+                        >
+                          {isCurrent ? "Em Jogo" : "▶ Jogar"}
+                        </button>
                       </div>
                     </article>
                   );
@@ -1586,6 +1898,60 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Floating Bottom Console Dock (Navegação Rápida ao Alcance do Polegar) */}
+      <nav className="bottom-dock" aria-label="Navegação Rápida">
+        <button
+          className={`dock-btn ${!remoteOpen && selectedFilter === "all" ? "active" : ""}`}
+          onClick={() => {
+            triggerHaptic(20);
+            setRemoteOpen(false);
+            setSelectedFilter("all");
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          }}
+        >
+          <span className="dock-icon">🏠</span>
+          <span className="dock-label">Início</span>
+        </button>
+
+        <button
+          className={`dock-btn ${!remoteOpen && selectedFilter === "fav" ? "active" : ""}`}
+          onClick={() => {
+            triggerHaptic(20);
+            setRemoteOpen(false);
+            setSelectedFilter("fav");
+          }}
+        >
+          <span className="dock-icon">⭐</span>
+          <span className="dock-label">Favoritos</span>
+          {counts.fav > 0 && <span className="dock-badge">{counts.fav}</span>}
+        </button>
+
+        <button
+          className={`dock-btn ${remoteOpen && remoteTab === "touchpad" ? "active" : ""}`}
+          onClick={() => {
+            triggerHaptic(25);
+            setRemoteTab("touchpad");
+            setRemoteOpen(true);
+          }}
+        >
+          <span className="dock-icon">🖱️</span>
+          <span className="dock-label">Touchpad</span>
+        </button>
+
+        <button
+          className={`dock-btn highlight-dock ${remoteOpen && remoteTab === "controls" ? "active" : ""}`}
+          onClick={() => {
+            triggerHaptic(25);
+            setRemoteTab("controls");
+            setRemoteOpen(true);
+          }}
+        >
+          <span className="dock-icon">🎛️</span>
+          <span className="dock-label">Controle PC</span>
+          {activeGame && <span className="dock-pulse-dot" title="Jogo em execução" />}
+        </button>
+      </nav>
     </div>
   );
 }
