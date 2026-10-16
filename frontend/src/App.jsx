@@ -73,7 +73,18 @@ export default function App() {
   const [savingEdit, setSavingEdit] = useState(false);
 
   const toastTimerRef = useRef(null);
-  const touchStateRef = useRef({ lastX: 0, lastY: 0, startTime: 0, moved: false, accumX: 0, accumY: 0, sending: false });
+  const volumeTimerRef = useRef(null);
+  const lastVolumeTouchRef = useRef(0);
+  const touchStateRef = useRef({
+    lastX: 0,
+    lastY: 0,
+    startTime: 0,
+    lastTouchTime: 0,
+    moved: false,
+    accumX: 0,
+    accumY: 0,
+    sending: false,
+  });
 
   // Show quick toast notification
   const showToast = (message, type = "info") => {
@@ -128,7 +139,9 @@ export default function App() {
       ]);
       if (statsRes.data) setPcStats(statsRes.data);
       if (audioRes.data) {
-        setVolume(audioRes.data.volume ?? 80);
+        if (Date.now() - lastVolumeTouchRef.current > 2000) {
+          setVolume(audioRes.data.volume ?? 80);
+        }
         setMuted(Boolean(audioRes.data.muted));
         setAudioDevices(audioRes.data.devices || []);
       }
@@ -289,20 +302,26 @@ export default function App() {
     loadGames(false);
   }
 
-  // Controle de volume (+, -, mute, slider)
+  // Controle de volume (+, -, mute, slider com debounce)
   async function sendVolume(action, value = undefined) {
-    triggerHaptic(20);
+    lastVolumeTouchRef.current = Date.now();
     if (action === "set" && typeof value === "number") {
       setVolume(value);
+      setMuted(false);
+      if (volumeTimerRef.current) clearTimeout(volumeTimerRef.current);
+      volumeTimerRef.current = setTimeout(() => {
+        axios.post(`${API}/system/volume`, { action: "set", value }).catch(() => {});
+      }, 60);
+      return;
     }
+
+    triggerHaptic(20);
     try {
       const res = await axios.post(`${API}/system/volume`, { action, value });
       if (typeof res.data?.volume === "number") setVolume(res.data.volume);
       if (typeof res.data?.muted === "boolean") setMuted(res.data.muted);
-      if (action !== "set") {
-        const labels = { up: "Volume +", down: "Volume -", mute: "Mudo alternado" };
-        showToast(labels[action] || "Volume ajustado", "info");
-      }
+      const labels = { up: "Volume +", down: "Volume -", mute: "Mudo alternado" };
+      showToast(labels[action] || "Volume ajustado", "info");
     } catch {
       showToast("Falha ao ajustar volume", "error");
     }
@@ -348,6 +367,7 @@ export default function App() {
         escape: "Esc enviado",
         enter: "Enter enviado",
         win: "Menu Iniciar (Win)",
+        wind: "Mostrar Área de Trabalho (Win+D)",
         backspace: "Backspace",
         space: "Espaço",
         tab: "Tab",
@@ -375,53 +395,74 @@ export default function App() {
     }
   }
 
+  function flushTouchpadMove() {
+    if (touchStateRef.current.sending) return;
+    const sendX = Math.round(touchStateRef.current.accumX);
+    const sendY = Math.round(touchStateRef.current.accumY);
+    if (sendX === 0 && sendY === 0) return;
+
+    touchStateRef.current.accumX = 0;
+    touchStateRef.current.accumY = 0;
+    touchStateRef.current.sending = true;
+
+    axios
+      .post(`${API}/system/mouse`, { action: "move", dx: sendX, dy: sendY })
+      .catch(() => {})
+      .finally(() => {
+        touchStateRef.current.sending = false;
+        if (Math.abs(touchStateRef.current.accumX) >= 1 || Math.abs(touchStateRef.current.accumY) >= 1) {
+          flushTouchpadMove();
+        }
+      });
+  }
+
   // Touchpad Virtual handlers
   function handleTouchStart(e) {
+    touchStateRef.current.lastTouchTime = Date.now();
     if (e.touches.length === 1) {
       const t = e.touches[0];
       touchStateRef.current.lastX = t.clientX;
       touchStateRef.current.lastY = t.clientY;
       touchStateRef.current.startTime = Date.now();
       touchStateRef.current.moved = false;
+    } else if (e.touches.length === 2) {
+      touchStateRef.current.moved = true;
     }
   }
 
   function handleTouchMove(e) {
+    touchStateRef.current.lastTouchTime = Date.now();
     if (e.touches.length !== 1) return;
     const t = e.touches[0];
-    const dx = (t.clientX - touchStateRef.current.lastX) * 1.8; // Sensibilidade
-    const dy = (t.clientY - touchStateRef.current.lastY) * 1.8;
+    const dx = (t.clientX - touchStateRef.current.lastX) * 2.1; // Sensibilidade fluida para TV
+    const dy = (t.clientY - touchStateRef.current.lastY) * 2.1;
     touchStateRef.current.lastX = t.clientX;
     touchStateRef.current.lastY = t.clientY;
 
-    if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) {
+    if (Math.abs(dx) > 1.2 || Math.abs(dy) > 1.2) {
       touchStateRef.current.moved = true;
     }
 
     touchStateRef.current.accumX += dx;
     touchStateRef.current.accumY += dy;
 
-    if (!touchStateRef.current.sending && (Math.abs(touchStateRef.current.accumX) >= 2 || Math.abs(touchStateRef.current.accumY) >= 2)) {
-      const sendX = Math.round(touchStateRef.current.accumX);
-      const sendY = Math.round(touchStateRef.current.accumY);
-      touchStateRef.current.accumX = 0;
-      touchStateRef.current.accumY = 0;
-      touchStateRef.current.sending = true;
-
-      axios
-        .post(`${API}/system/mouse`, { action: "move", dx: sendX, dy: sendY })
-        .catch(() => {})
-        .finally(() => {
-          touchStateRef.current.sending = false;
-        });
+    if (Math.abs(touchStateRef.current.accumX) >= 2 || Math.abs(touchStateRef.current.accumY) >= 2) {
+      flushTouchpadMove();
     }
   }
 
   function handleTouchEnd() {
+    touchStateRef.current.lastTouchTime = Date.now();
+    flushTouchpadMove();
     const elapsed = Date.now() - touchStateRef.current.startTime;
     if (!touchStateRef.current.moved && elapsed < 260) {
       sendMouseClick("left");
     }
+  }
+
+  function handleDesktopTouchpadClick() {
+    if (Date.now() - touchStateRef.current.lastTouchTime < 800) return;
+    sendMouseClick("left");
   }
 
   async function sendMouseClick(button = "left") {
@@ -1066,18 +1107,23 @@ export default function App() {
                 {/* Seção Teclas de Atalho do Windows */}
                 <div className="remote-section">
                   <span className="section-title">⌨️ Atalhos da Tela</span>
-                  <div className="remote-button-group four-cols">
+                  <div className="remote-button-group">
                     <button className="remote-btn" onClick={() => sendKey("alttab")}>
                       🗔 Alt+Tab
                     </button>
+                    <button className="remote-btn" onClick={() => sendKey("wind")}>
+                      🖥️ Desktop
+                    </button>
+                    <button className="remote-btn" onClick={() => sendKey("win")}>
+                      ⊞ Win
+                    </button>
+                  </div>
+                  <div className="remote-button-group two-cols">
                     <button className="remote-btn" onClick={() => sendKey("escape")}>
                       ⎋ Esc
                     </button>
                     <button className="remote-btn" onClick={() => sendKey("enter")}>
                       ↵ Enter
-                    </button>
-                    <button className="remote-btn" onClick={() => sendKey("win")}>
-                      ⊞ Win
                     </button>
                   </div>
                 </div>
@@ -1140,7 +1186,7 @@ export default function App() {
                     onTouchStart={handleTouchStart}
                     onTouchMove={handleTouchMove}
                     onTouchEnd={handleTouchEnd}
-                    onClick={() => sendMouseClick("left")}
+                    onClick={handleDesktopTouchpadClick}
                   >
                     <span className="touchpad-watermark">🖱️ Área de Toque da TV</span>
                   </div>

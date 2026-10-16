@@ -114,6 +114,16 @@ namespace SysControl {
     }
 
     class Program {
+        // Desktop attachment P/Invoke (ensures input goes to the real interactive TV/monitor screen)
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr OpenDesktopW(string lpszDesktop, uint dwFlags, bool fInherit, uint dwDesiredAccess);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool SetThreadDesktop(IntPtr hDesktop);
+
         [DllImport("user32.dll")]
         public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);
 
@@ -127,27 +137,25 @@ namespace SysControl {
         public static extern bool SetCursorPos(int X, int Y);
 
         [DllImport("user32.dll")]
-        public static extern IntPtr SendMessageW(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+        public static extern IntPtr PostMessageW(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int GetClassNameW(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
         [DllImport("user32.dll")]
         public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("powrprof.dll", SetLastError = true)]
+        public static extern bool SetSuspendState(bool hibernate, bool forceCritical, bool disableWakeEvent);
 
         [StructLayout(LayoutKind.Sequential)]
         public struct POINT {
             public int X;
             public int Y;
         }
-
-        private const int WM_APPCOMMAND = 0x0319;
-        private const int APPCOMMAND_VOLUME_MUTE = 0x80000;
-        private const int APPCOMMAND_VOLUME_DOWN = 0x90000;
-        private const int APPCOMMAND_VOLUME_UP = 0xA0000;
-        private const int APPCOMMAND_MEDIA_NEXTTRACK = 0xB0000;
-        private const int APPCOMMAND_MEDIA_PREVIOUSTRACK = 0xC0000;
-        private const int APPCOMMAND_MEDIA_PLAY_PAUSE = 0xE0000;
 
         private const byte VK_BACK = 0x08;    // Backspace
         private const byte VK_TAB = 0x09;     // Tab
@@ -162,13 +170,30 @@ namespace SysControl {
         private const byte VK_LWIN = 0x5B;    // Left Win
         private const byte VK_F4 = 0x73;      // F4
 
+        // Hardware Media & Volume Virtual Keys
+        private const byte VK_VOLUME_MUTE = 0xAD;
+        private const byte VK_VOLUME_DOWN = 0xAE;
+        private const byte VK_VOLUME_UP = 0xAF;
+        private const byte VK_MEDIA_NEXT_TRACK = 0xB0;
+        private const byte VK_MEDIA_PREV_TRACK = 0xB1;
+        private const byte VK_MEDIA_STOP = 0xB2;
+        private const byte VK_MEDIA_PLAY_PAUSE = 0xB3;
+
+        private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
         private const uint KEYEVENTF_KEYUP = 0x0002;
 
+        [DllImport("user32.dll")]
+        public static extern int GetSystemMetrics(int nIndex);
+
+        private const uint MOUSEEVENTF_MOVE = 0x0001;
         private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
         private const uint MOUSEEVENTF_LEFTUP = 0x0004;
         private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
         private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
         private const uint MOUSEEVENTF_WHEEL = 0x0800;
+        private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
+
+        private const uint WM_CLOSE = 0x0010;
 
         [StructLayout(LayoutKind.Sequential)]
         struct INPUT {
@@ -176,7 +201,7 @@ namespace SysControl {
             public INPUTUNION u;
         }
 
-        [StructLayout(LayoutKind.Explicit)]
+        [StructLayout(LayoutKind.Explicit, Size = 32)]
         struct INPUTUNION {
             [FieldOffset(0)] public MOUSEINPUT mi;
             [FieldOffset(0)] public KEYBDINPUT ki;
@@ -204,8 +229,25 @@ namespace SysControl {
         [DllImport("user32.dll", SetLastError = true)]
         static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
+        [DllImport("user32.dll")]
+        static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
+        private const uint INPUT_MOUSE = 0;
         private const uint INPUT_KEYBOARD = 1;
+        private const uint KEYEVENTF_SCANCODE = 0x0008;
         private const uint KEYEVENTF_UNICODE = 0x0004;
+
+        static void AttachToInteractiveDesktop() {
+            try {
+                IntPtr hDesk = OpenInputDesktop(0, false, 0x01FF);
+                if (hDesk == IntPtr.Zero) {
+                    hDesk = OpenDesktopW("Default", 0, false, 0x01FF);
+                }
+                if (hDesk != IntPtr.Zero) {
+                    SetThreadDesktop(hDesk);
+                }
+            } catch { }
+        }
 
         static void SendUnicodeText(string text) {
             if (string.IsNullOrEmpty(text)) return;
@@ -225,27 +267,44 @@ namespace SysControl {
                 up.u.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
                 inputs.Add(up);
             }
-            SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf(typeof(INPUT)));
+            uint sent = SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf(typeof(INPUT)));
+            Console.WriteLine("{\"sent\":" + sent + ",\"size\":" + Marshal.SizeOf(typeof(INPUT)) + "}");
         }
 
-        static void PressKey(byte vk) {
-            keybd_event(vk, 0, 0, 0);
-            Thread.Sleep(15);
-            keybd_event(vk, 0, KEYEVENTF_KEYUP, 0);
+        static void PressKey(byte vk, bool extended = false) {
+            uint flags = extended ? KEYEVENTF_EXTENDEDKEY : 0;
+            byte scan = (byte)MapVirtualKey(vk, 0);
+            keybd_event(vk, scan, flags, 0);
+            Thread.Sleep(25);
+            keybd_event(vk, scan, flags | KEYEVENTF_KEYUP, 0);
         }
 
-        static void PressCombo(byte vk1, byte vk2) {
-            keybd_event(vk1, 0, 0, 0);
-            Thread.Sleep(15);
-            keybd_event(vk2, 0, 0, 0);
-            Thread.Sleep(15);
-            keybd_event(vk2, 0, KEYEVENTF_KEYUP, 0);
-            Thread.Sleep(15);
-            keybd_event(vk1, 0, KEYEVENTF_KEYUP, 0);
+        static void PressCombo(byte vk1, byte vk2, bool ext1 = false) {
+            uint flags1 = ext1 ? KEYEVENTF_EXTENDEDKEY : 0;
+            byte scan1 = (byte)MapVirtualKey(vk1, 0);
+            byte scan2 = (byte)MapVirtualKey(vk2, 0);
+            keybd_event(vk1, scan1, flags1, 0);
+            Thread.Sleep(35);
+            keybd_event(vk2, scan2, 0, 0);
+            Thread.Sleep(55);
+            keybd_event(vk2, scan2, KEYEVENTF_KEYUP, 0);
+            Thread.Sleep(35);
+            keybd_event(vk1, scan1, flags1 | KEYEVENTF_KEYUP, 0);
         }
 
-        static void SendAppCmd(int cmd) {
-            SendMessageW((IntPtr)0xffff, WM_APPCOMMAND, IntPtr.Zero, (IntPtr)cmd);
+        static void SendSoftClose() {
+            PressCombo(VK_MENU, VK_F4);
+            try {
+                IntPtr hwnd = GetForegroundWindow();
+                if (hwnd != IntPtr.Zero) {
+                    StringBuilder cls = new StringBuilder(128);
+                    GetClassNameW(hwnd, cls, 128);
+                    string clsName = cls.ToString();
+                    if (clsName != "Progman" && clsName != "WorkerW" && clsName != "Shell_TrayWnd") {
+                        PostMessageW(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                    }
+                }
+            } catch { }
         }
 
         static void KillPid(int pid) {
@@ -364,6 +423,40 @@ namespace SysControl {
             }
         }
 
+        static void AdjustVolumeRelative(int deltaPct) {
+            try {
+                IAudioEndpointVolume vol = GetAudioEndpointVolume();
+                float level = 0;
+                vol.GetMasterVolumeLevelScalar(out level);
+                int currentPct = (int)Math.Round(level * 100);
+                int nextPct = currentPct + deltaPct;
+                if (nextPct < 0) nextPct = 0;
+                if (nextPct > 100) nextPct = 100;
+
+                Guid ctx = Guid.Empty;
+                vol.SetMasterVolumeLevelScalar(nextPct / 100.0f, ref ctx);
+                if (deltaPct > 0) {
+                    vol.SetMute(false, ref ctx);
+                }
+                PrintVolumeJson();
+            } catch (Exception ex) {
+                Console.WriteLine("{\"error\":\"" + EscapeJson(ex.Message) + "\"}");
+            }
+        }
+
+        static void ToggleMute() {
+            try {
+                IAudioEndpointVolume vol = GetAudioEndpointVolume();
+                bool muted = false;
+                vol.GetMute(out muted);
+                Guid ctx = Guid.Empty;
+                vol.SetMute(!muted, ref ctx);
+                PrintVolumeJson();
+            } catch (Exception ex) {
+                Console.WriteLine("{\"error\":\"" + EscapeJson(ex.Message) + "\"}");
+            }
+        }
+
         static void SetVolumeLevel(int pct) {
             try {
                 if (pct < 0) pct = 0;
@@ -444,9 +537,9 @@ namespace SysControl {
             }
         }
 
-        static void Main(string[] args) {
-            Console.OutputEncoding = Encoding.UTF8;
-            if (args.Length == 0) return;
+        static void ExecuteCommand(string[] args) {
+            AttachToInteractiveDesktop();
+
             string action = args[0].ToLowerInvariant();
             int steps = 1;
             if (args.Length > 1) int.TryParse(args[1], out steps);
@@ -454,23 +547,13 @@ namespace SysControl {
 
             switch (action) {
                 case "volup":
-                    for (int i = 0; i < steps; i++) {
-                        SendAppCmd(APPCOMMAND_VOLUME_UP);
-                        Thread.Sleep(20);
-                    }
-                    PrintVolumeJson();
+                    AdjustVolumeRelative(steps * 2);
                     break;
                 case "voldown":
-                    for (int i = 0; i < steps; i++) {
-                        SendAppCmd(APPCOMMAND_VOLUME_DOWN);
-                        Thread.Sleep(20);
-                    }
-                    PrintVolumeJson();
+                    AdjustVolumeRelative(-(steps * 2));
                     break;
                 case "volmute":
-                    SendAppCmd(APPCOMMAND_VOLUME_MUTE);
-                    Thread.Sleep(30);
-                    PrintVolumeJson();
+                    ToggleMute();
                     break;
                 case "getvol":
                     PrintVolumeJson();
@@ -493,19 +576,19 @@ namespace SysControl {
                     }
                     break;
                 case "playpause":
-                    SendAppCmd(APPCOMMAND_MEDIA_PLAY_PAUSE);
+                    PressKey(VK_MEDIA_PLAY_PAUSE, true);
                     break;
                 case "next":
-                    SendAppCmd(APPCOMMAND_MEDIA_NEXTTRACK);
+                    PressKey(VK_MEDIA_NEXT_TRACK, true);
                     break;
                 case "prev":
-                    SendAppCmd(APPCOMMAND_MEDIA_PREVIOUSTRACK);
+                    PressKey(VK_MEDIA_PREV_TRACK, true);
                     break;
                 case "alttab":
                     PressCombo(VK_MENU, VK_TAB);
                     break;
                 case "altf4":
-                    PressCombo(VK_MENU, VK_F4);
+                    SendSoftClose();
                     break;
                 case "escape":
                     PressKey(VK_ESCAPE);
@@ -523,19 +606,22 @@ namespace SysControl {
                     PressKey(VK_TAB);
                     break;
                 case "up":
-                    PressKey(VK_UP);
+                    PressKey(VK_UP, true);
                     break;
                 case "down":
-                    PressKey(VK_DOWN);
+                    PressKey(VK_DOWN, true);
                     break;
                 case "left":
-                    PressKey(VK_LEFT);
+                    PressKey(VK_LEFT, true);
                     break;
                 case "right":
-                    PressKey(VK_RIGHT);
+                    PressKey(VK_RIGHT, true);
                     break;
                 case "win":
-                    PressKey(VK_LWIN);
+                    PressKey(VK_LWIN, true);
+                    break;
+                case "wind":
+                    PressCombo(VK_LWIN, 0x44, true);
                     break;
                 case "mousemove":
                     if (args.Length >= 3) {
@@ -544,7 +630,18 @@ namespace SysControl {
                         int.TryParse(args[2], out dy);
                         POINT pt;
                         if (GetCursorPos(out pt)) {
-                            SetCursorPos(pt.X + dx, pt.Y + dy);
+                            int screenW = GetSystemMetrics(0);
+                            int screenH = GetSystemMetrics(1);
+                            if (screenW <= 1) screenW = 1920;
+                            if (screenH <= 1) screenH = 1080;
+                            int targetX = Math.Max(0, Math.Min(screenW - 1, pt.X + dx));
+                            int targetY = Math.Max(0, Math.Min(screenH - 1, pt.Y + dy));
+                            int absX = (int)Math.Round((targetX * 65535.0) / (screenW - 1));
+                            int absY = (int)Math.Round((targetY * 65535.0) / (screenH - 1));
+                            SetCursorPos(targetX, targetY);
+                            mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, absX, absY, 0, 0);
+                        } else {
+                            mouse_event(MOUSEEVENTF_MOVE, dx, dy, 0, 0);
                         }
                     }
                     break;
@@ -552,19 +649,19 @@ namespace SysControl {
                     string btn = args.Length > 1 ? args[1].ToLowerInvariant() : "left";
                     if (btn == "right") {
                         mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0);
-                        Thread.Sleep(15);
+                        Thread.Sleep(20);
                         mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0);
                     } else if (btn == "double") {
                         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-                        Thread.Sleep(10);
+                        Thread.Sleep(15);
                         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
-                        Thread.Sleep(40);
+                        Thread.Sleep(50);
                         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-                        Thread.Sleep(10);
+                        Thread.Sleep(15);
                         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
                     } else {
                         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-                        Thread.Sleep(15);
+                        Thread.Sleep(20);
                         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
                     }
                     break;
@@ -583,6 +680,9 @@ namespace SysControl {
                             SendUnicodeText(decoded);
                         } catch { }
                     }
+                    break;
+                case "sleep":
+                    SetSuspendState(false, false, false);
                     break;
                 case "killpid":
                     int targetPid = 0;
@@ -605,10 +705,37 @@ namespace SysControl {
                         Launch(fullPath);
                     }
                     break;
+                case "cursorpos":
+                    POINT cur;
+                    if (GetCursorPos(out cur)) {
+                        Console.WriteLine("{\"x\":" + cur.X + ",\"y\":" + cur.Y + "}");
+                    } else {
+                        Console.WriteLine("{\"x\":0,\"y\":0}");
+                    }
+                    break;
+                case "deskinfo":
+                    POINT p1, p2;
+                    bool g1 = GetCursorPos(out p1);
+                    bool s1 = SetCursorPos(p1.X + 100, p1.Y + 100);
+                    int e1 = Marshal.GetLastWin32Error();
+                    GetCursorPos(out p2);
+                    Console.WriteLine(string.Format("Get1={0}({1},{2}) Set1={3}(err={4}) After=({5},{6})",
+                        g1, p1.X, p1.Y, s1, e1, p2.X, p2.Y));
+                    break;
                 default:
                     Console.WriteLine("Unknown command: " + action);
                     break;
             }
+        }
+
+        static void Main(string[] args) {
+            Console.OutputEncoding = Encoding.UTF8;
+            if (args.Length == 0) return;
+
+            // Run on a dedicated fresh thread so SetThreadDesktop("Default") always succeeds
+            Thread worker = new Thread(() => ExecuteCommand(args));
+            worker.Start();
+            worker.Join();
         }
     }
 }

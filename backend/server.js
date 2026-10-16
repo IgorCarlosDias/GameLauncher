@@ -752,7 +752,21 @@ app.post("/system/audio/device", async (req, res) => {
   }
 });
 
-// Controle de Volume do Windows (+, -, Mudo e Slider 0-100%)
+// Controle de Volume do Windows (+, -, Mudo e Slider 0-100% com coalescência)
+let pendingVolumeVal = null;
+let flushingVolume = false;
+
+async function flushVolumeSet() {
+  if (flushingVolume) return;
+  flushingVolume = true;
+  while (pendingVolumeVal !== null) {
+    const val = pendingVolumeVal;
+    pendingVolumeVal = null;
+    await runSysControl("setvol", String(val));
+  }
+  flushingVolume = false;
+}
+
 app.post("/system/volume", async (req, res) => {
   const { action, value } = req.body || {};
   try {
@@ -764,7 +778,10 @@ app.post("/system/volume", async (req, res) => {
     } else if (action === "mute") {
       out = await runSysControl("volmute");
     } else if (action === "set" && typeof value === "number") {
-      out = await runSysControl("setvol", String(Math.round(value)));
+      const clamped = Math.max(0, Math.min(100, Math.round(value)));
+      pendingVolumeVal = clamped;
+      flushVolumeSet();
+      return res.json({ success: true, action, volume: clamped, muted: false });
     } else {
       return res.status(400).json({ success: false, message: "Ação de volume inválida" });
     }
@@ -801,12 +818,34 @@ app.post("/system/media", async (req, res) => {
   }
 });
 
-// Touchpad Virtual (Mover cursor, Clique esquerdo/direito/duplo, Scroll)
+// Touchpad Virtual (Mover cursor com fila coalescida, Clique esquerdo/direito/duplo, Scroll)
+let pendingMouseDx = 0;
+let pendingMouseDy = 0;
+let flushingMouse = false;
+
+async function flushMouseMove() {
+  if (flushingMouse) return;
+  flushingMouse = true;
+  while (pendingMouseDx !== 0 || pendingMouseDy !== 0) {
+    const dx = Math.round(pendingMouseDx);
+    const dy = Math.round(pendingMouseDy);
+    pendingMouseDx = 0;
+    pendingMouseDy = 0;
+    if (dx !== 0 || dy !== 0) {
+      await runSysControl("mousemove", `${dx} ${dy}`);
+    }
+  }
+  flushingMouse = false;
+}
+
 app.post("/system/mouse", async (req, res) => {
   const { action, dx = 0, dy = 0, button = "left", delta = 0 } = req.body || {};
   try {
     if (action === "move") {
-      await runSysControl("mousemove", `${Math.round(dx)} ${Math.round(dy)}`);
+      pendingMouseDx += Number(dx) || 0;
+      pendingMouseDy += Number(dy) || 0;
+      flushMouseMove();
+      return res.json({ success: true });
     } else if (action === "click") {
       await runSysControl("mouseclick", button);
     } else if (action === "scroll") {
@@ -834,6 +873,7 @@ const VALID_KEYS = new Set([
   "left",
   "right",
   "win",
+  "wind",
 ]);
 
 app.post("/system/key", async (req, res) => {
@@ -868,11 +908,11 @@ app.post("/system/keyboard", async (req, res) => {
 });
 
 // Controle de Energia (Suspender, Desligar, Reiniciar, Cancelar)
-app.post("/system/power", (req, res) => {
+app.post("/system/power", async (req, res) => {
   const { action } = req.body || {};
   try {
     if (action === "sleep") {
-      exec("rundll32.exe powrprof.dll,SetSuspendState 0,1,0");
+      runSysControl("sleep");
     } else if (action === "shutdown") {
       exec('shutdown /s /t 30 /c "GameLauncher: Desligando PC em 30s"');
     } else if (action === "restart") {
