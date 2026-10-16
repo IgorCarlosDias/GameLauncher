@@ -75,6 +75,7 @@ export default function App() {
   const toastTimerRef = useRef(null);
   const volumeTimerRef = useRef(null);
   const lastVolumeTouchRef = useRef(0);
+  const touchCanvasRef = useRef(null);
   const touchStateRef = useRef({
     lastX: 0,
     lastY: 0,
@@ -84,6 +85,13 @@ export default function App() {
     accumX: 0,
     accumY: 0,
     sending: false,
+    isTouching: false,
+    mouseDown: false,
+    currentLocalX: 0,
+    currentLocalY: 0,
+    points: [],
+    ripples: [],
+    animFrameId: null,
   });
 
   // Show quick toast notification
@@ -416,6 +424,135 @@ export default function App() {
       });
   }
 
+  // Renderiza o rastro luminoso do dedo no canvas do Touchpad
+  function startTrailAnimation() {
+    if (touchStateRef.current.animFrameId) return;
+
+    const renderFrame = () => {
+      const canvas = touchCanvasRef.current;
+      if (!canvas) {
+        touchStateRef.current.animFrameId = null;
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const targetW = Math.round(rect.width * dpr);
+      const targetH = Math.round(rect.height * dpr);
+
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+      }
+
+      const ctx = canvas.getContext("2d");
+      ctx.save();
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+
+      const now = performance.now();
+      const trailLifetime = 360; // ms que o rastro permanece visível
+      const rippleLifetime = 420; // ms da onda de toque
+
+      const state = touchStateRef.current;
+      state.points = state.points.filter((p) => now - p.time < trailLifetime);
+      state.ripples = state.ripples.filter((r) => now - r.time < rippleLifetime);
+
+      // Desenhar ondas de clique/toque (ripples)
+      for (const r of state.ripples) {
+        const progress = (now - r.time) / rippleLifetime;
+        const radius = 6 + progress * 28;
+        const alpha = (1 - progress) * 0.65;
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(56, 189, 248, ${alpha})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      // Desenhar o rastro contínuo estilo neon / cometa
+      const pts = state.points;
+      if (pts.length > 1) {
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+
+        for (let i = 1; i < pts.length; i++) {
+          const prev = pts[i - 1];
+          const curr = pts[i];
+          const age = (now - curr.time) / trailLifetime;
+          const life = Math.max(0, 1 - age);
+
+          ctx.beginPath();
+          ctx.moveTo(prev.x, prev.y);
+          ctx.lineTo(curr.x, curr.y);
+
+          // Brilho externo ciano/índigo
+          ctx.shadowColor = "rgba(56, 189, 248, 0.85)";
+          ctx.shadowBlur = 12 * life;
+          ctx.strokeStyle = `rgba(56, 189, 248, ${life * 0.85})`;
+          ctx.lineWidth = Math.max(1.5, 9 * life);
+          ctx.stroke();
+
+          // Núcleo mais claro no centro do traço
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = `rgba(224, 242, 254, ${life * 0.9})`;
+          ctx.lineWidth = Math.max(0.8, 3.2 * life);
+          ctx.stroke();
+        }
+      }
+
+      // Desenhar halo luminoso debaixo do dedo enquanto estiver pressionado
+      if (state.isTouching) {
+        const grad = ctx.createRadialGradient(
+          state.currentLocalX,
+          state.currentLocalY,
+          2,
+          state.currentLocalX,
+          state.currentLocalY,
+          20
+        );
+        grad.addColorStop(0, "rgba(224, 242, 254, 0.95)");
+        grad.addColorStop(0.35, "rgba(56, 189, 248, 0.55)");
+        grad.addColorStop(1, "rgba(99, 102, 241, 0)");
+
+        ctx.beginPath();
+        ctx.arc(state.currentLocalX, state.currentLocalY, 20, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+      }
+
+      ctx.restore();
+
+      if (state.isTouching || state.points.length > 0 || state.ripples.length > 0) {
+        state.animFrameId = requestAnimationFrame(renderFrame);
+      } else {
+        state.animFrameId = null;
+      }
+    };
+
+    touchStateRef.current.animFrameId = requestAnimationFrame(renderFrame);
+  }
+
+  function recordTrailPoint(clientX, clientY, addRipple = false) {
+    const canvas = touchCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const now = performance.now();
+
+    touchStateRef.current.currentLocalX = x;
+    touchStateRef.current.currentLocalY = y;
+    touchStateRef.current.points.push({ x, y, time: now });
+    if (touchStateRef.current.points.length > 45) {
+      touchStateRef.current.points.shift();
+    }
+    if (addRipple) {
+      touchStateRef.current.ripples.push({ x, y, time: now });
+    }
+    startTrailAnimation();
+  }
+
   // Touchpad Virtual handlers
   function handleTouchStart(e) {
     touchStateRef.current.lastTouchTime = Date.now();
@@ -425,6 +562,8 @@ export default function App() {
       touchStateRef.current.lastY = t.clientY;
       touchStateRef.current.startTime = Date.now();
       touchStateRef.current.moved = false;
+      touchStateRef.current.isTouching = true;
+      recordTrailPoint(t.clientX, t.clientY, true);
     } else if (e.touches.length === 2) {
       touchStateRef.current.moved = true;
     }
@@ -434,6 +573,8 @@ export default function App() {
     touchStateRef.current.lastTouchTime = Date.now();
     if (e.touches.length !== 1) return;
     const t = e.touches[0];
+    recordTrailPoint(t.clientX, t.clientY, false);
+
     const dx = (t.clientX - touchStateRef.current.lastX) * 2.1; // Sensibilidade fluida para TV
     const dy = (t.clientY - touchStateRef.current.lastY) * 2.1;
     touchStateRef.current.lastX = t.clientX;
@@ -453,15 +594,61 @@ export default function App() {
 
   function handleTouchEnd() {
     touchStateRef.current.lastTouchTime = Date.now();
+    touchStateRef.current.isTouching = false;
+    startTrailAnimation();
     flushTouchpadMove();
     const elapsed = Date.now() - touchStateRef.current.startTime;
     if (!touchStateRef.current.moved && elapsed < 260) {
+      touchStateRef.current.ripples.push({
+        x: touchStateRef.current.currentLocalX,
+        y: touchStateRef.current.currentLocalY,
+        time: performance.now(),
+      });
+      startTrailAnimation();
       sendMouseClick("left");
     }
   }
 
-  function handleDesktopTouchpadClick() {
+  // Suporte também para arrastar com o mouse no desktop para testar o rastro
+  function handleMouseDownTouchpad(e) {
     if (Date.now() - touchStateRef.current.lastTouchTime < 800) return;
+    touchStateRef.current.mouseDown = true;
+    touchStateRef.current.isTouching = true;
+    touchStateRef.current.lastX = e.clientX;
+    touchStateRef.current.lastY = e.clientY;
+    touchStateRef.current.moved = false;
+    recordTrailPoint(e.clientX, e.clientY, true);
+  }
+
+  function handleMouseMoveTouchpad(e) {
+    if (!touchStateRef.current.mouseDown) return;
+    recordTrailPoint(e.clientX, e.clientY, false);
+    const dx = (e.clientX - touchStateRef.current.lastX) * 2.1;
+    const dy = (e.clientY - touchStateRef.current.lastY) * 2.1;
+    touchStateRef.current.lastX = e.clientX;
+    touchStateRef.current.lastY = e.clientY;
+    if (Math.abs(dx) > 1.2 || Math.abs(dy) > 1.2) {
+      touchStateRef.current.moved = true;
+    }
+    touchStateRef.current.accumX += dx;
+    touchStateRef.current.accumY += dy;
+    if (Math.abs(touchStateRef.current.accumX) >= 2 || Math.abs(touchStateRef.current.accumY) >= 2) {
+      flushTouchpadMove();
+    }
+  }
+
+  function handleMouseUpTouchpad() {
+    if (!touchStateRef.current.mouseDown) return;
+    touchStateRef.current.mouseDown = false;
+    touchStateRef.current.isTouching = false;
+    startTrailAnimation();
+    flushTouchpadMove();
+  }
+
+  function handleDesktopTouchpadClick(e) {
+    if (Date.now() - touchStateRef.current.lastTouchTime < 800) return;
+    if (touchStateRef.current.moved) return;
+    recordTrailPoint(e.clientX, e.clientY, true);
     sendMouseClick("left");
   }
 
@@ -1186,8 +1373,13 @@ export default function App() {
                     onTouchStart={handleTouchStart}
                     onTouchMove={handleTouchMove}
                     onTouchEnd={handleTouchEnd}
+                    onMouseDown={handleMouseDownTouchpad}
+                    onMouseMove={handleMouseMoveTouchpad}
+                    onMouseUp={handleMouseUpTouchpad}
+                    onMouseLeave={handleMouseUpTouchpad}
                     onClick={handleDesktopTouchpadClick}
                   >
+                    <canvas ref={touchCanvasRef} className="touchpad-canvas" />
                     <span className="touchpad-watermark">🖱️ Área de Toque da TV</span>
                   </div>
 
@@ -1215,7 +1407,7 @@ export default function App() {
                 {/* Teclado Rápido */}
                 <div className="remote-section">
                   <span className="section-title">⌨️ Digitar Texto no PC</span>
-                  <form className="keyboard-form" onSubmit={(e) => sendKeyboardText(e, true)}>
+                  <form className="keyboard-form" onSubmit={(e) => sendKeyboardText(e, false)}>
                     <input
                       type="text"
                       className="keyboard-input"
@@ -1223,7 +1415,19 @@ export default function App() {
                       value={keyboardText}
                       onChange={(e) => setKeyboardText(e.target.value)}
                     />
-                    <button type="submit" className="btn btn-primary">
+                    <button
+                      type="submit"
+                      className="btn btn-secondary"
+                      title="Apenas digita o texto sem apertar Enter"
+                    >
+                      Digitar
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={(e) => sendKeyboardText(e, true)}
+                      title="Digita o texto e aperta Enter em seguida"
+                    >
                       Enviar ↵
                     </button>
                   </form>
