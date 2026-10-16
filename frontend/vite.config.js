@@ -22,7 +22,7 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_API_URL': JSON.stringify(apiUrl),
     },
     server: {
-      host: serverIp || true,
+      host: '0.0.0.0',
       port: frontendPort,
     },
   }
