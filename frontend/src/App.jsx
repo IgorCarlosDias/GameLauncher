@@ -1,7 +1,9 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import axios from "axios";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:3000";
+const SERVER_IP = import.meta.env.VITE_SERVER_IP;
+const API_PORT = import.meta.env.VITE_API_PORT;
+const API = import.meta.env.VITE_API_URL || `http://${SERVER_IP}:${API_PORT}`;
 
 // Haptic feedback helper for mobile touch devices
 function triggerHaptic(ms = 22) {
@@ -14,7 +16,7 @@ function triggerHaptic(ms = 22) {
   }
 }
 
-// Format seconds into HH:MM:SS or MM:SS
+// Format seconds into HH:MM:SS or MM:SS (for active timer)
 function formatTimer(seconds) {
   const hrs = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
@@ -25,10 +27,21 @@ function formatTimer(seconds) {
   return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
 
+// Format total play time in seconds into human-readable hours/minutes
+function formatPlayTime(seconds) {
+  if (!seconds || seconds < 60) return null;
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  if (hrs > 0) {
+    return mins > 0 ? `${hrs}h ${mins}m` : `${hrs}h`;
+  }
+  return `${mins}m`;
+}
+
 export default function App() {
   const [games, setGames] = useState([]);
   const [search, setSearch] = useState("");
-  const [selectedFilter, setSelectedFilter] = useState("all"); // 'all' | '.exe' | '.lnk' | '.url'
+  const [selectedFilter, setSelectedFilter] = useState("all"); // 'all' | 'fav' | '.exe' | '.lnk' | '.url'
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -39,10 +52,28 @@ export default function App() {
   const [activeGame, setActiveGame] = useState(null);
   const [activeSeconds, setActiveSeconds] = useState(0);
   const [remoteOpen, setRemoteOpen] = useState(false);
-  const [powerModal, setPowerModal] = useState(null); // 'sleep' | 'shutdown' | 'restart' | null
+  const [remoteTab, setRemoteTab] = useState("controls"); // 'controls' | 'touchpad'
+  const [powerModal, setPowerModal] = useState(null); // 'sleep' | 'shutdown' | null
   const [shutdownScheduled, setShutdownScheduled] = useState(false);
 
+  // System stats & audio states
+  const [pcStats, setPcStats] = useState(null);
+  const [volume, setVolume] = useState(80);
+  const [muted, setMuted] = useState(false);
+  const [audioDevices, setAudioDevices] = useState([]);
+  const [keyboardText, setKeyboardText] = useState("");
+
+  // Edit Game / Cover Modal states
+  const [editingGame, setEditingGame] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [coverQuery, setCoverQuery] = useState("");
+  const [coverResults, setCoverResults] = useState([]);
+  const [loadingCovers, setLoadingCovers] = useState(false);
+  const [customCoverUrl, setCustomCoverUrl] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
   const toastTimerRef = useRef(null);
+  const touchStateRef = useRef({ lastX: 0, lastY: 0, startTime: 0, moved: false, accumX: 0, accumY: 0, sending: false });
 
   // Show quick toast notification
   const showToast = (message, type = "info") => {
@@ -75,13 +106,34 @@ export default function App() {
   async function checkActiveGame() {
     try {
       const response = await axios.get(`${API}/system/active-game`);
-      if (response.data && response.data.activeGame) {
-        setActiveGame(response.data.activeGame);
-      } else {
-        setActiveGame(null);
-      }
+      const serverActive = response.data?.activeGame || null;
+      setActiveGame((prev) => {
+        if (prev && !serverActive) {
+          // Jogo acabou de fechar no PC; recarrega biblioteca para atualizar tempo de jogo
+          loadGames(false);
+        }
+        return serverActive;
+      });
     } catch {
       // Ignora falha de polling silencioso
+    }
+  }
+
+  // Carregar estatísticas do PC e áudio quando abrir o Controle Remoto
+  async function fetchRemoteInfo() {
+    try {
+      const [statsRes, audioRes] = await Promise.all([
+        axios.get(`${API}/system/stats`),
+        axios.get(`${API}/system/audio`),
+      ]);
+      if (statsRes.data) setPcStats(statsRes.data);
+      if (audioRes.data) {
+        setVolume(audioRes.data.volume ?? 80);
+        setMuted(Boolean(audioRes.data.muted));
+        setAudioDevices(audioRes.data.devices || []);
+      }
+    } catch {
+      // Ignore silent error
     }
   }
 
@@ -100,6 +152,82 @@ export default function App() {
     }
   }
 
+  // Favoritar / Desfavoritar jogo
+  async function toggleFavorite(e, game) {
+    e.stopPropagation();
+    triggerHaptic(25);
+    try {
+      const res = await axios.post(`${API}/games/${game.id}/favorite`);
+      if (res.data.success) {
+        setGames((prev) => {
+          const updated = prev.map((g) =>
+            g.id === game.id ? { ...g, favorite: res.data.favorite } : g
+          );
+          updated.sort((a, b) => {
+            if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
+            return a.name.localeCompare(b.name);
+          });
+          return updated;
+        });
+        showToast(
+          res.data.favorite ? `⭐ ${game.name} adicionado aos Favoritos` : `Removido dos Favoritos`,
+          "info"
+        );
+      }
+    } catch {
+      showToast("Erro ao atualizar favorito", "error");
+    }
+  }
+
+  // Abrir modal de edição de jogo / capa
+  async function openEditModal(e, game) {
+    e.stopPropagation();
+    triggerHaptic(25);
+    setEditingGame(game);
+    setEditName(game.name);
+    setCoverQuery(game.name);
+    setCustomCoverUrl("");
+    setCoverResults([]);
+    searchCoversForModal(game.id, game.name);
+  }
+
+  async function searchCoversForModal(gameId, queryText) {
+    if (!queryText.trim()) return;
+    setLoadingCovers(true);
+    try {
+      const res = await axios.get(`${API}/games/${gameId}/covers`, {
+        params: { query: queryText.trim() },
+      });
+      setCoverResults(res.data?.covers || []);
+    } catch {
+      showToast("Erro ao buscar capas no SteamGridDB", "error");
+    } finally {
+      setLoadingCovers(false);
+    }
+  }
+
+  async function saveGameEdit(selectedCoverUrl = null) {
+    if (!editingGame) return;
+    triggerHaptic(35);
+    setSavingEdit(true);
+    try {
+      const coverToSave = selectedCoverUrl || customCoverUrl.trim() || undefined;
+      const res = await axios.put(`${API}/games/${editingGame.id}`, {
+        customName: editName.trim(),
+        coverUrl: coverToSave,
+      });
+      if (res.data?.success) {
+        showToast("✅ Jogo atualizado com sucesso!", "success");
+        setEditingGame(null);
+        await loadGames(false);
+      }
+    } catch {
+      showToast("Falha ao salvar alterações do jogo", "error");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
   // Iniciar jogo
   async function playGame(game) {
     triggerHaptic(40);
@@ -109,14 +237,17 @@ export default function App() {
     try {
       const res = await axios.post(`${API}/play`, { id: game.id });
       if (res.data.success) {
-        setActiveGame({
-          id: game.id,
-          name: game.name,
-          cover: game.cover,
-          startedAt: new Date().toISOString()
-        });
+        setActiveGame(
+          res.data.activeGame || {
+            id: game.id,
+            name: game.name,
+            cover: game.cover,
+            startedAt: new Date().toISOString(),
+          }
+        );
         setActiveSeconds(0);
         showToast(`🎮 ${game.name} iniciado no PC!`, "success");
+        loadGames(false);
       }
     } catch (err) {
       console.error("Erro iniciando jogo:", err);
@@ -126,23 +257,26 @@ export default function App() {
     }
   }
 
-  // Encerrar jogo atual (com taskkill)
+  // Encerrar jogo atual (soft Alt+F4 vs hard Taskkill)
   async function closeActiveGame(force = true, targetParams = {}) {
     triggerHaptic(50);
-    showToast(force ? "Encerrando processo com taskkill..." : "Enviando Alt+F4...", "info");
+    showToast(force ? "Encerrando processo com Taskkill..." : "Enviando Alt+F4 suave ao jogo...", "info");
     try {
       const res = await axios.post(`${API}/system/close-game`, { force, ...targetParams });
-      showToast(res.data?.message || (force ? "Jogo encerrado via taskkill" : "Alt+F4 enviado ao PC"), "success");
+      showToast(
+        res.data?.message || (force ? "Jogo encerrado via Taskkill" : "Alt+F4 enviado ao PC"),
+        "success"
+      );
       setActiveGame(null);
       setActiveSeconds(0);
+      loadGames(false);
     } catch (err) {
       console.error("Erro ao fechar:", err);
       showToast("Falha ao encerrar jogo", "error");
     }
   }
 
-
-  // Dispensar barra de jogo ativo sem mandar comando
+  // Dispensar barra de jogo ativo salvando a sessão
   async function dismissActiveGame() {
     triggerHaptic(20);
     try {
@@ -152,17 +286,39 @@ export default function App() {
     }
     setActiveGame(null);
     setActiveSeconds(0);
+    loadGames(false);
   }
 
-  // Controle de volume
-  async function sendVolume(action) {
-    triggerHaptic(25);
+  // Controle de volume (+, -, mute, slider)
+  async function sendVolume(action, value = undefined) {
+    triggerHaptic(20);
+    if (action === "set" && typeof value === "number") {
+      setVolume(value);
+    }
     try {
-      await axios.post(`${API}/system/volume`, { action });
-      const labels = { up: "Volume +", down: "Volume -", mute: "Mudo alternado" };
-      showToast(labels[action] || "Volume ajustado", "info");
+      const res = await axios.post(`${API}/system/volume`, { action, value });
+      if (typeof res.data?.volume === "number") setVolume(res.data.volume);
+      if (typeof res.data?.muted === "boolean") setMuted(res.data.muted);
+      if (action !== "set") {
+        const labels = { up: "Volume +", down: "Volume -", mute: "Mudo alternado" };
+        showToast(labels[action] || "Volume ajustado", "info");
+      }
     } catch {
       showToast("Falha ao ajustar volume", "error");
+    }
+  }
+
+  // Trocar dispositivo de saída de áudio (TV HDMI <-> Headset)
+  async function switchAudioDevice(deviceId, deviceName) {
+    triggerHaptic(35);
+    try {
+      const res = await axios.post(`${API}/system/audio/device`, { deviceId });
+      if (res.data?.devices) {
+        setAudioDevices(res.data.devices);
+      }
+      showToast(`🔊 Saída alterada: ${deviceName}`, "success");
+    } catch {
+      showToast("Falha ao trocar saída de áudio", "error");
     }
   }
 
@@ -171,7 +327,11 @@ export default function App() {
     triggerHaptic(25);
     try {
       await axios.post(`${API}/system/media`, { action });
-      const labels = { play_pause: "Play / Pause", next: "Próxima faixa", prev: "Faixa anterior" };
+      const labels = {
+        play_pause: "Play / Pause",
+        next: "Próxima faixa",
+        prev: "Faixa anterior",
+      };
       showToast(labels[action] || "Comando de mídia enviado", "info");
     } catch {
       showToast("Falha no comando de mídia", "error");
@@ -180,13 +340,105 @@ export default function App() {
 
   // Teclas de atalho
   async function sendKey(key) {
-    triggerHaptic(30);
+    triggerHaptic(25);
     try {
       await axios.post(`${API}/system/key`, { key });
-      const labels = { alttab: "Alt + Tab enviado", escape: "Esc enviado", enter: "Enter enviado" };
-      showToast(labels[key] || "Tecla enviada", "info");
+      const labels = {
+        alttab: "Alt + Tab enviado",
+        escape: "Esc enviado",
+        enter: "Enter enviado",
+        win: "Menu Iniciar (Win)",
+        backspace: "Backspace",
+        space: "Espaço",
+        tab: "Tab",
+      };
+      if (labels[key]) showToast(labels[key], "info");
     } catch {
       showToast("Falha ao enviar tecla", "error");
+    }
+  }
+
+  // Enviar texto digitado para o PC
+  async function sendKeyboardText(e, withEnter = false) {
+    if (e) e.preventDefault();
+    if (!keyboardText) return;
+    triggerHaptic(30);
+    try {
+      await axios.post(`${API}/system/keyboard`, {
+        text: keyboardText,
+        submitEnter: withEnter,
+      });
+      setKeyboardText("");
+      showToast("⌨️ Texto enviado para o PC", "success");
+    } catch {
+      showToast("Falha ao enviar texto", "error");
+    }
+  }
+
+  // Touchpad Virtual handlers
+  function handleTouchStart(e) {
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      touchStateRef.current.lastX = t.clientX;
+      touchStateRef.current.lastY = t.clientY;
+      touchStateRef.current.startTime = Date.now();
+      touchStateRef.current.moved = false;
+    }
+  }
+
+  function handleTouchMove(e) {
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    const dx = (t.clientX - touchStateRef.current.lastX) * 1.8; // Sensibilidade
+    const dy = (t.clientY - touchStateRef.current.lastY) * 1.8;
+    touchStateRef.current.lastX = t.clientX;
+    touchStateRef.current.lastY = t.clientY;
+
+    if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) {
+      touchStateRef.current.moved = true;
+    }
+
+    touchStateRef.current.accumX += dx;
+    touchStateRef.current.accumY += dy;
+
+    if (!touchStateRef.current.sending && (Math.abs(touchStateRef.current.accumX) >= 2 || Math.abs(touchStateRef.current.accumY) >= 2)) {
+      const sendX = Math.round(touchStateRef.current.accumX);
+      const sendY = Math.round(touchStateRef.current.accumY);
+      touchStateRef.current.accumX = 0;
+      touchStateRef.current.accumY = 0;
+      touchStateRef.current.sending = true;
+
+      axios
+        .post(`${API}/system/mouse`, { action: "move", dx: sendX, dy: sendY })
+        .catch(() => {})
+        .finally(() => {
+          touchStateRef.current.sending = false;
+        });
+    }
+  }
+
+  function handleTouchEnd() {
+    const elapsed = Date.now() - touchStateRef.current.startTime;
+    if (!touchStateRef.current.moved && elapsed < 260) {
+      sendMouseClick("left");
+    }
+  }
+
+  async function sendMouseClick(button = "left") {
+    triggerHaptic(20);
+    try {
+      await axios.post(`${API}/system/mouse`, { action: "click", button });
+    } catch {
+      // ignore
+    }
+  }
+
+  async function sendMouseScroll(delta) {
+    triggerHaptic(15);
+    try {
+      await axios.post(`${API}/system/mouse`, { action: "scroll", delta });
+    } catch {
+      // ignore
     }
   }
 
@@ -215,10 +467,17 @@ export default function App() {
     loadGames();
     checkActiveGame();
 
-    // Polling a cada 10s para verificar status do jogo
-    const interval = setInterval(checkActiveGame, 10000);
+    const interval = setInterval(checkActiveGame, 6000);
     return () => clearInterval(interval);
   }, []);
+
+  // Atualiza status do PC quando o Controle Remoto está aberto
+  useEffect(() => {
+    if (!remoteOpen) return;
+    fetchRemoteInfo();
+    const interval = setInterval(fetchRemoteInfo, 4000);
+    return () => clearInterval(interval);
+  }, [remoteOpen]);
 
   // Timer do jogo ativo
   useEffect(() => {
@@ -239,6 +498,14 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeGame]);
 
+  // Jogos jogados recentemente (últimos 4 com lastPlayed)
+  const recentGames = useMemo(() => {
+    return [...games]
+      .filter((g) => g.lastPlayed)
+      .sort((a, b) => new Date(b.lastPlayed).getTime() - new Date(a.lastPlayed).getTime())
+      .slice(0, 4);
+  }, [games]);
+
   // Filtragem dos jogos
   const filteredGames = useMemo(() => {
     return games.filter((game) => {
@@ -246,6 +513,7 @@ export default function App() {
       if (!matchesSearch) return false;
 
       if (selectedFilter === "all") return true;
+      if (selectedFilter === "fav") return Boolean(game.favorite);
       if (selectedFilter === ".exe") return game.extension === ".exe";
       if (selectedFilter === ".lnk") return game.extension === ".lnk";
       if (selectedFilter === ".url") return game.extension === ".url";
@@ -257,6 +525,7 @@ export default function App() {
   const counts = useMemo(() => {
     return {
       all: games.length,
+      fav: games.filter((g) => g.favorite).length,
       exe: games.filter((g) => g.extension === ".exe").length,
       lnk: games.filter((g) => g.extension === ".lnk").length,
       url: games.filter((g) => g.extension === ".url").length,
@@ -275,12 +544,18 @@ export default function App() {
       {/* Header Fixo / Estilo Console */}
       <header className="navbar">
         <div className="navbar-container">
-          <div className="brand" onClick={() => { setSearch(""); setSelectedFilter("all"); }}>
+          <div
+            className="brand"
+            onClick={() => {
+              setSearch("");
+              setSelectedFilter("all");
+            }}
+          >
             <img src="/gamepad.svg" alt="GameLauncher" className="brand-logo" />
             <div className="brand-text">
               <h1>GameLauncher</h1>
               <span className="online-badge">
-                <span className="badge-dot"></span> Online
+                <span className="badge-dot"></span> Online • {SERVER_IP}
               </span>
             </div>
           </div>
@@ -329,11 +604,11 @@ export default function App() {
                 <div className="banner-meta">
                   <span className="banner-timer">⏱️ {formatTimer(activeSeconds)}</span>
                   {activeGame.pid && (
-                    <span className="banner-pid" title="Process ID">PID: {activeGame.pid}</span>
+                    <span className="banner-pid" title="Process ID">
+                      PID: {activeGame.pid}
+                    </span>
                   )}
-                  {activeGame.exeName && (
-                    <span className="banner-exe">{activeGame.exeName}</span>
-                  )}
+                  {activeGame.exeName && <span className="banner-exe">{activeGame.exeName}</span>}
                 </div>
               </div>
             </div>
@@ -342,14 +617,14 @@ export default function App() {
               <button
                 className="btn btn-close-taskkill"
                 onClick={() => closeActiveGame(true)}
-                title="Encerra o processo do jogo imediatamente via taskkill"
+                title="Encerra o processo do jogo imediatamente via Taskkill"
               >
-                🛑 Encerrar Jogo (Taskkill)
+                🛑 Encerrar (Taskkill)
               </button>
               <button
                 className="btn btn-close-soft"
                 onClick={() => closeActiveGame(false)}
-                title="Envia Alt+F4 para tentar salvar o progresso antes de sair"
+                title="Envia apenas Alt+F4 suave para o jogo fechar salvando progresso"
               >
                 ✕ Alt+F4
               </button>
@@ -404,14 +679,31 @@ export default function App() {
           <div className="filter-pills">
             <button
               className={`pill ${selectedFilter === "all" ? "active" : ""}`}
-              onClick={() => { triggerHaptic(15); setSelectedFilter("all"); }}
+              onClick={() => {
+                triggerHaptic(15);
+                setSelectedFilter("all");
+              }}
             >
               Todos ({counts.all})
             </button>
+            {counts.fav > 0 && (
+              <button
+                className={`pill pill-fav ${selectedFilter === "fav" ? "active" : ""}`}
+                onClick={() => {
+                  triggerHaptic(15);
+                  setSelectedFilter("fav");
+                }}
+              >
+                ⭐ Favoritos ({counts.fav})
+              </button>
+            )}
             {counts.exe > 0 && (
               <button
                 className={`pill ${selectedFilter === ".exe" ? "active" : ""}`}
-                onClick={() => { triggerHaptic(15); setSelectedFilter(".exe"); }}
+                onClick={() => {
+                  triggerHaptic(15);
+                  setSelectedFilter(".exe");
+                }}
               >
                 Executáveis ({counts.exe})
               </button>
@@ -419,7 +711,10 @@ export default function App() {
             {counts.lnk > 0 && (
               <button
                 className={`pill ${selectedFilter === ".lnk" ? "active" : ""}`}
-                onClick={() => { triggerHaptic(15); setSelectedFilter(".lnk"); }}
+                onClick={() => {
+                  triggerHaptic(15);
+                  setSelectedFilter(".lnk");
+                }}
               >
                 Atalhos ({counts.lnk})
               </button>
@@ -427,13 +722,55 @@ export default function App() {
             {counts.url > 0 && (
               <button
                 className={`pill ${selectedFilter === ".url" ? "active" : ""}`}
-                onClick={() => { triggerHaptic(15); setSelectedFilter(".url"); }}
+                onClick={() => {
+                  triggerHaptic(15);
+                  setSelectedFilter(".url");
+                }}
               >
                 Steam / Web ({counts.url})
               </button>
             )}
           </div>
         </section>
+
+        {/* Seção: Continuar Jogando (Recentes) */}
+        {!loading && !error && !search && selectedFilter === "all" && recentGames.length > 0 && (
+          <section className="recent-section">
+            <div className="section-heading">
+              <h3>🕹️ Continuar Jogando</h3>
+              <span className="section-sub">Abertos recentemente</span>
+            </div>
+            <div className="recent-strip">
+              {recentGames.map((game) => {
+                const playTimeText = formatPlayTime(game.playTime);
+                return (
+                  <div
+                    key={`recent-${game.id}`}
+                    className="recent-card"
+                    onClick={() => playGame(game)}
+                  >
+                    {game.cover ? (
+                      <img
+                        src={`${API}/covers/${game.cover}`}
+                        alt={game.name}
+                        className="recent-thumb"
+                      />
+                    ) : (
+                      <div className="recent-thumb-placeholder">🎮</div>
+                    )}
+                    <div className="recent-meta">
+                      <strong>{game.name}</strong>
+                      <span>
+                        {playTimeText ? `⏱️ ${playTimeText}` : `${game.playCount || 1}x jogado`}
+                      </span>
+                    </div>
+                    <span className="recent-play-icon">▶</span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Estados de Carregamento e Erro */}
         {loading && (
@@ -470,6 +807,7 @@ export default function App() {
                 {filteredGames.map((game) => {
                   const isLaunching = launchingId === game.id;
                   const isCurrent = activeGame && activeGame.id === game.id;
+                  const playTimeLabel = formatPlayTime(game.playTime);
 
                   return (
                     <article
@@ -491,6 +829,24 @@ export default function App() {
                           </div>
                         )}
 
+                        {/* Botões flutuantes no topo esquerdo: Favorito & Editar */}
+                        <div className="card-overlay-actions">
+                          <button
+                            className={`card-icon-btn fav-btn ${game.favorite ? "active" : ""}`}
+                            onClick={(e) => toggleFavorite(e, game)}
+                            title={game.favorite ? "Remover dos Favoritos" : "Adicionar aos Favoritos"}
+                          >
+                            {game.favorite ? "★" : "☆"}
+                          </button>
+                          <button
+                            className="card-icon-btn edit-btn"
+                            onClick={(e) => openEditModal(e, game)}
+                            title="Editar nome ou trocar capa"
+                          >
+                            ✏️
+                          </button>
+                        </div>
+
                         {/* Tag da extensão */}
                         <span className={`badge-ext badge-${game.extension?.replace(".", "")}`}>
                           {game.extension === ".url"
@@ -504,9 +860,21 @@ export default function App() {
                       </div>
 
                       <div className="card-info">
-                        <h2 title={game.name} className="game-title">
-                          {game.name}
-                        </h2>
+                        <div className="card-title-group">
+                          <h2 title={game.name} className="game-title">
+                            {game.name}
+                          </h2>
+                          <div className="game-stats-line">
+                            {playTimeLabel ? (
+                              <span className="stat-pill">⏱️ {playTimeLabel}</span>
+                            ) : (
+                              <span className="stat-pill dim">Não jogado</span>
+                            )}
+                            {game.playCount > 0 && (
+                              <span className="stat-pill dim">{game.playCount}x</span>
+                            )}
+                          </div>
+                        </div>
 
                         <div className="card-btn-row">
                           <button
@@ -532,12 +900,11 @@ export default function App() {
                                 e.stopPropagation();
                                 closeActiveGame(true, { id: game.id, exeName: game.resolvedExe });
                               }}
-                              title="Encerrar processo do jogo via taskkill"
+                              title="Encerrar processo do jogo via Taskkill"
                             >
                               🛑 Fechar
                             </button>
                           )}
-
                         </div>
                       </div>
                     </article>
@@ -567,101 +934,378 @@ export default function App() {
               </button>
             </div>
 
-            <div className="remote-body">
-              {/* Seção Volume */}
-              <div className="remote-section">
-                <span className="section-title">🔊 Volume do Windows</span>
-                <div className="remote-button-group">
-                  <button className="remote-btn" onClick={() => sendVolume("mute")}>
-                    🔇 Mudo
-                  </button>
-                  <button className="remote-btn" onClick={() => sendVolume("down")}>
-                    🔉 - Volume
-                  </button>
-                  <button className="remote-btn" onClick={() => sendVolume("up")}>
-                    🔊 + Volume
-                  </button>
+            {/* Monitor de Desempenho do PC */}
+            {pcStats && (
+              <div className="pc-stats-bar">
+                <div className="stat-box">
+                  <span className="stat-label">CPU</span>
+                  <div className="stat-progress">
+                    <div
+                      className="stat-progress-fill cpu"
+                      style={{ width: `${pcStats.cpuPercent}%` }}
+                    ></div>
+                  </div>
+                  <strong className="stat-val">{pcStats.cpuPercent}%</strong>
+                </div>
+                <div className="stat-box">
+                  <span className="stat-label">RAM</span>
+                  <div className="stat-progress">
+                    <div
+                      className="stat-progress-fill ram"
+                      style={{ width: `${pcStats.ramPercent}%` }}
+                    ></div>
+                  </div>
+                  <strong className="stat-val">
+                    {pcStats.ramUsedGB}/{pcStats.ramTotalGB}GB
+                  </strong>
+                </div>
+                <div className="stat-box compact">
+                  <span className="stat-label">Ativo</span>
+                  <strong className="stat-val">{pcStats.uptimeHours}h</strong>
                 </div>
               </div>
+            )}
 
-              {/* Seção Mídia */}
-              <div className="remote-section">
-                <span className="section-title">🎵 Reprodução</span>
-                <div className="remote-button-group">
-                  <button className="remote-btn" onClick={() => sendMedia("prev")}>
-                    ⏮ Anterior
-                  </button>
-                  <button className="remote-btn highlight" onClick={() => sendMedia("play_pause")}>
-                    ⏯ Play / Pause
-                  </button>
-                  <button className="remote-btn" onClick={() => sendMedia("next")}>
-                    ⏭ Próximo
-                  </button>
-                </div>
-              </div>
+            {/* Abas do Controle Remoto */}
+            <div className="remote-tabs">
+              <button
+                className={`remote-tab-btn ${remoteTab === "controls" ? "active" : ""}`}
+                onClick={() => {
+                  triggerHaptic(15);
+                  setRemoteTab("controls");
+                }}
+              >
+                🎛️ Áudio & Sistema
+              </button>
+              <button
+                className={`remote-tab-btn ${remoteTab === "touchpad" ? "active" : ""}`}
+                onClick={() => {
+                  triggerHaptic(15);
+                  setRemoteTab("touchpad");
+                }}
+              >
+                🖱️ Touchpad & Teclado
+              </button>
+            </div>
 
-              {/* Seção Teclas de Atalho do Windows */}
-              <div className="remote-section">
-                <span className="section-title">⌨️ Atalhos da Tela</span>
-                <div className="remote-button-group">
-                  <button className="remote-btn" onClick={() => sendKey("alttab")}>
-                    🗔 Alt + Tab
-                  </button>
-                  <button className="remote-btn" onClick={() => sendKey("escape")}>
-                    ⎋ Esc
-                  </button>
-                  <button className="remote-btn" onClick={() => sendKey("enter")}>
-                    ↵ Enter
-                  </button>
-                </div>
-              </div>
+            {remoteTab === "controls" ? (
+              <div className="remote-body">
+                {/* Seção Volume com Slider */}
+                <div className="remote-section">
+                  <div className="section-header-row">
+                    <span className="section-title">🔊 Volume do Windows</span>
+                    <span className="volume-badge">
+                      {muted ? "🔇 Mudo" : `${volume}%`}
+                    </span>
+                  </div>
 
-              {/* Seção Encerrar Jogo (Taskkill) */}
-              <div className="remote-section">
-                <span className="section-title">🛑 Encerramento Forçado (Taskkill)</span>
-                <div className="remote-kill-container">
-                  {activeGame ? (
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={volume}
+                    onChange={(e) => sendVolume("set", Number(e.target.value))}
+                    className="volume-slider"
+                  />
+
+                  <div className="remote-button-group">
                     <button
-                      className="remote-btn btn-danger-action btn-kill-wide"
+                      className={`remote-btn ${muted ? "btn-danger-action" : ""}`}
+                      onClick={() => sendVolume("mute")}
+                    >
+                      🔇 {muted ? "Ativar Som" : "Mudo"}
+                    </button>
+                    <button className="remote-btn" onClick={() => sendVolume("down")}>
+                      🔉 - Volume
+                    </button>
+                    <button className="remote-btn" onClick={() => sendVolume("up")}>
+                      🔊 + Volume
+                    </button>
+                  </div>
+                </div>
+
+                {/* Seletor de Saída de Áudio (TV HDMI / Headset) */}
+                {audioDevices.length > 0 && (
+                  <div className="remote-section">
+                    <span className="section-title">📺 Saída de Áudio (TV / Headset)</span>
+                    <div className="audio-devices-list">
+                      {audioDevices.map((dev) => (
+                        <button
+                          key={dev.id}
+                          className={`audio-device-btn ${dev.isDefault ? "active" : ""}`}
+                          onClick={() => switchAudioDevice(dev.id, dev.name)}
+                        >
+                          <span className="device-icon">{dev.isDefault ? "🔊" : "🔈"}</span>
+                          <span className="device-name">{dev.name}</span>
+                          {dev.isDefault && <span className="device-check">Ativo</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Seção Mídia */}
+                <div className="remote-section">
+                  <span className="section-title">🎵 Reprodução de Mídia</span>
+                  <div className="remote-button-group">
+                    <button className="remote-btn" onClick={() => sendMedia("prev")}>
+                      ⏮ Anterior
+                    </button>
+                    <button
+                      className="remote-btn highlight"
+                      onClick={() => sendMedia("play_pause")}
+                    >
+                      ⏯ Play / Pause
+                    </button>
+                    <button className="remote-btn" onClick={() => sendMedia("next")}>
+                      ⏭ Próximo
+                    </button>
+                  </div>
+                </div>
+
+                {/* Seção Teclas de Atalho do Windows */}
+                <div className="remote-section">
+                  <span className="section-title">⌨️ Atalhos da Tela</span>
+                  <div className="remote-button-group four-cols">
+                    <button className="remote-btn" onClick={() => sendKey("alttab")}>
+                      🗔 Alt+Tab
+                    </button>
+                    <button className="remote-btn" onClick={() => sendKey("escape")}>
+                      ⎋ Esc
+                    </button>
+                    <button className="remote-btn" onClick={() => sendKey("enter")}>
+                      ↵ Enter
+                    </button>
+                    <button className="remote-btn" onClick={() => sendKey("win")}>
+                      ⊞ Win
+                    </button>
+                  </div>
+                </div>
+
+                {/* Seção Encerrar Jogo */}
+                <div className="remote-section">
+                  <span className="section-title">🛑 Fechar Jogo / Janela</span>
+                  <div className="remote-kill-row">
+                    <button
+                      className="remote-btn btn-warning-action"
+                      onClick={() => {
+                        setRemoteOpen(false);
+                        closeActiveGame(false);
+                      }}
+                    >
+                      ✕ Fechar Suave (Alt+F4)
+                    </button>
+                    <button
+                      className="remote-btn btn-danger-action"
                       onClick={() => {
                         setRemoteOpen(false);
                         closeActiveGame(true);
                       }}
                     >
-                      🛑 Encerrar {activeGame.name} {activeGame.pid ? `(PID: ${activeGame.pid})` : ""}
+                      🛑 Forçar Taskkill
                     </button>
-                  ) : (
-                    <button
-                      className="remote-btn btn-danger-action btn-kill-wide"
-                      onClick={() => {
-                        setRemoteOpen(false);
-                        closeActiveGame(true);
-                      }}
-                    >
-                      🛑 Forçar Fechamento de Jogo / Janela Ativa na TV (Taskkill)
-                    </button>
-                  )}
+                  </div>
                 </div>
-              </div>
 
-              {/* Seção Energia do Computador */}
-              <div className="remote-section">
-                <span className="section-title">⚡ Energia do Computador</span>
-                <div className="remote-button-group">
-                  <button
-                    className="remote-btn btn-warning-action"
-                    onClick={() => setPowerModal("sleep")}
-                  >
-                    💤 Suspender PC
-                  </button>
-                  <button
-                    className="remote-btn btn-danger-action"
-                    onClick={() => setPowerModal("shutdown")}
-                  >
-                    🛑 Desligar PC
-                  </button>
+                {/* Seção Energia do Computador */}
+                <div className="remote-section">
+                  <span className="section-title">⚡ Energia do Computador</span>
+                  <div className="remote-button-group two-cols">
+                    <button
+                      className="remote-btn btn-warning-action"
+                      onClick={() => setPowerModal("sleep")}
+                    >
+                      💤 Suspender PC
+                    </button>
+                    <button
+                      className="remote-btn btn-danger-action"
+                      onClick={() => setPowerModal("shutdown")}
+                    >
+                      🛑 Desligar PC
+                    </button>
+                  </div>
                 </div>
               </div>
+            ) : (
+              <div className="remote-body">
+                {/* Aba Touchpad Virtual */}
+                <div className="remote-section">
+                  <div className="section-header-row">
+                    <span className="section-title">🖱️ Trackpad Virtual</span>
+                    <span className="touchpad-hint">Arraste para mover • Toque para clicar</span>
+                  </div>
+
+                  <div
+                    className="touchpad-surface"
+                    onTouchStart={handleTouchStart}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd}
+                    onClick={() => sendMouseClick("left")}
+                  >
+                    <span className="touchpad-watermark">🖱️ Área de Toque da TV</span>
+                  </div>
+
+                  <div className="remote-button-group four-cols">
+                    <button className="remote-btn" onClick={() => sendMouseClick("left")}>
+                      🖱️ Esq.
+                    </button>
+                    <button className="remote-btn" onClick={() => sendMouseClick("double")}>
+                      ⚡ 2x Clique
+                    </button>
+                    <button className="remote-btn" onClick={() => sendMouseClick("right")}>
+                      🖱️ Dir.
+                    </button>
+                    <div className="scroll-pair">
+                      <button className="remote-btn small" onClick={() => sendMouseScroll(240)}>
+                        ▲
+                      </button>
+                      <button className="remote-btn small" onClick={() => sendMouseScroll(-240)}>
+                        ▼
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Teclado Rápido */}
+                <div className="remote-section">
+                  <span className="section-title">⌨️ Digitar Texto no PC</span>
+                  <form className="keyboard-form" onSubmit={(e) => sendKeyboardText(e, true)}>
+                    <input
+                      type="text"
+                      className="keyboard-input"
+                      placeholder="Digite texto, senha ou busca..."
+                      value={keyboardText}
+                      onChange={(e) => setKeyboardText(e.target.value)}
+                    />
+                    <button type="submit" className="btn btn-primary">
+                      Enviar ↵
+                    </button>
+                  </form>
+
+                  <div className="remote-button-group four-cols">
+                    <button className="remote-btn" onClick={() => sendKey("backspace")}>
+                      ⌫ Apagar
+                    </button>
+                    <button className="remote-btn" onClick={() => sendKey("space")}>
+                      ␣ Espaço
+                    </button>
+                    <button className="remote-btn" onClick={() => sendKey("tab")}>
+                      ⇥ Tab
+                    </button>
+                    <button className="remote-btn highlight" onClick={() => sendKey("enter")}>
+                      ↵ Enter
+                    </button>
+                  </div>
+
+                  {/* Setas Direcionais */}
+                  <div className="remote-button-group four-cols">
+                    <button className="remote-btn" onClick={() => sendKey("left")}>
+                      ◀ Esq
+                    </button>
+                    <button className="remote-btn" onClick={() => sendKey("up")}>
+                      ▲ Cima
+                    </button>
+                    <button className="remote-btn" onClick={() => sendKey("down")}>
+                      ▼ Baixo
+                    </button>
+                    <button className="remote-btn" onClick={() => sendKey("right")}>
+                      ▶ Dir
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Edição de Jogo e Escolha de Capa (SteamGridDB Gallery) */}
+      {editingGame && (
+        <div className="modal-backdrop" onClick={() => setEditingGame(null)}>
+          <div className="modal-dialog modal-large" onClick={(e) => e.stopPropagation()}>
+            <div className="remote-header">
+              <h3>✏️ Editar Jogo</h3>
+              <button className="remote-close-btn" onClick={() => setEditingGame(null)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="edit-form-group">
+              <label>Nome de Exibição</label>
+              <input
+                type="text"
+                className="search-input compact"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder={editingGame.originalName}
+              />
+            </div>
+
+            <div className="edit-form-group">
+              <label>Buscar Capa no SteamGridDB</label>
+              <div className="cover-search-row">
+                <input
+                  type="text"
+                  className="search-input compact"
+                  value={coverQuery}
+                  onChange={(e) => setCoverQuery(e.target.value)}
+                  placeholder="Nome do jogo para buscar capas..."
+                />
+                <button
+                  className="btn btn-primary"
+                  onClick={() => searchCoversForModal(editingGame.id, coverQuery)}
+                  disabled={loadingCovers}
+                >
+                  {loadingCovers ? "..." : "🔍 Buscar"}
+                </button>
+              </div>
+            </div>
+
+            {loadingCovers ? (
+              <div className="covers-loading">
+                <div className="spinner"></div>
+                <span>Buscando capas no SteamGridDB...</span>
+              </div>
+            ) : coverResults.length > 0 ? (
+              <div className="cover-gallery">
+                {coverResults.map((item) => (
+                  <div
+                    key={item.id}
+                    className="cover-option"
+                    onClick={() => saveGameEdit(item.url)}
+                    title={`Aplicar capa de ${item.gameName}`}
+                  >
+                    <img src={item.thumb} alt={item.gameName} loading="lazy" />
+                    <span className="cover-apply-tag">Usar Capa</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="muted-hint">Nenhuma capa listada. Pesquise outro termo ou cole uma URL abaixo.</p>
+            )}
+
+            <div className="edit-form-group">
+              <label>Ou URL Direta da Imagem (Opcional)</label>
+              <input
+                type="url"
+                className="search-input compact"
+                value={customCoverUrl}
+                onChange={(e) => setCustomCoverUrl(e.target.value)}
+                placeholder="https://exemplo.com/capa.jpg"
+              />
+            </div>
+
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setEditingGame(null)}>
+                Cancelar
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => saveGameEdit()}
+                disabled={savingEdit}
+              >
+                {savingEdit ? "Salvando..." : "Salvar Alterações"}
+              </button>
             </div>
           </div>
         </div>
@@ -685,10 +1329,7 @@ export default function App() {
               <button className="btn btn-secondary" onClick={() => setPowerModal(null)}>
                 Cancelar
               </button>
-              <button
-                className="btn btn-danger"
-                onClick={() => sendPower(powerModal)}
-              >
+              <button className="btn btn-danger" onClick={() => sendPower(powerModal)}>
                 Confirmar
               </button>
             </div>

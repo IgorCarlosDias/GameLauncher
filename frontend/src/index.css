@@ -953,3 +953,510 @@ body {
     gap: 8px;
   }
 }
+
+
+/* =====================================================
+   NEW FEATURES: FAVORITES, RECENT STRIP, STATS, TOUCHPAD, COVER GALLERY
+   ===================================================== */
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-cyan));
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+.pill-fav.active {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  border-color: #f59e0b;
+  color: #000;
+  font-weight: 700;
+}
+
+/* Recent Games Strip */
+.recent-section {
+  margin-bottom: 26px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.section-heading h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.section-sub {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.recent-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.recent-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.recent-card:hover,
+.recent-card:active {
+  border-color: rgba(56, 189, 248, 0.5);
+  background: var(--bg-surface-hover);
+  transform: translateY(-2px);
+}
+
+.recent-thumb {
+  width: 38px;
+  height: 50px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.recent-thumb-placeholder {
+  width: 38px;
+  height: 50px;
+  border-radius: 6px;
+  background: #1e293b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.recent-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+  flex: 1;
+}
+
+.recent-meta strong {
+  font-size: 0.9rem;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-meta span {
+  font-size: 0.75rem;
+  color: var(--accent-cyan);
+}
+
+.recent-play-icon {
+  color: var(--accent-cyan);
+  font-size: 0.9rem;
+  padding-left: 4px;
+}
+
+/* Card Overlay Actions (Favorite & Edit) */
+.card-overlay-actions {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  gap: 6px;
+  z-index: 4;
+}
+
+.card-icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(9, 13, 22, 0.75);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #cbd5e1;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.card-icon-btn:hover,
+.card-icon-btn:active {
+  transform: scale(1.08);
+  background: rgba(15, 23, 42, 0.92);
+  color: #fff;
+}
+
+.card-icon-btn.fav-btn.active {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.5);
+  background: rgba(251, 191, 36, 0.15);
+}
+
+.card-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.game-stats-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.stat-pill {
+  font-size: 0.72rem;
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
+
+.stat-pill.dim {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+/* PC Stats Bar in Remote Drawer */
+.pc-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(9, 13, 22, 0.65);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+
+.stat-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.stat-box.compact {
+  flex: 0 0 auto;
+}
+
+.stat-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.stat-progress {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.stat-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.stat-progress-fill.cpu {
+  background: linear-gradient(90deg, var(--accent-cyan), var(--accent-primary));
+}
+
+.stat-progress-fill.ram {
+  background: linear-gradient(90deg, var(--accent-purple), #ec4899);
+}
+
+.stat-val {
+  font-size: 0.75rem;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Remote Control Tabs */
+.remote-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  background: var(--bg-main);
+  padding: 5px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  margin-bottom: 18px;
+}
+
+.remote-tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.remote-tab-btn.active {
+  background: var(--accent-primary);
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.35);
+}
+
+.section-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.volume-badge {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  background: rgba(56, 189, 248, 0.12);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.volume-slider {
+  width: 100%;
+  accent-color: var(--accent-cyan);
+  height: 6px;
+  cursor: pointer;
+  margin: 4px 0;
+}
+
+/* Audio Output Devices List */
+.audio-devices-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.audio-device-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  text-align: left;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.audio-device-btn.active {
+  border-color: rgba(56, 189, 248, 0.55);
+  background: rgba(56, 189, 248, 0.12);
+  color: #fff;
+  font-weight: 600;
+}
+
+.device-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.device-check {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  background: rgba(34, 197, 94, 0.15);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.remote-button-group.four-cols {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.remote-button-group.two-cols {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.remote-kill-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+/* Virtual Touchpad & Keyboard */
+.touchpad-hint {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.touchpad-surface {
+  width: 100%;
+  height: 190px;
+  background: radial-gradient(circle at center, #182238 0%, #0d1322 100%);
+  border: 1px dashed rgba(99, 102, 241, 0.45);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  user-select: none;
+  cursor: crosshair;
+  box-shadow: inset 0 4px 20px rgba(0, 0, 0, 0.6);
+}
+
+.touchpad-surface:active {
+  border-color: var(--accent-cyan);
+  background: radial-gradient(circle at center, #1e2b48 0%, #0f172a 100%);
+}
+
+.touchpad-watermark {
+  font-size: 0.85rem;
+  color: rgba(148, 163, 184, 0.35);
+  pointer-events: none;
+  font-weight: 600;
+}
+
+.scroll-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.remote-btn.small {
+  min-height: 26px;
+  padding: 4px;
+  font-size: 0.75rem;
+}
+
+.keyboard-form {
+  display: flex;
+  gap: 8px;
+}
+
+.keyboard-input {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: #fff;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.keyboard-input:focus {
+  border-color: var(--border-focus);
+}
+
+/* Edit Game & Cover Picker Modal */
+.modal-dialog.modal-large {
+  max-width: 560px;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.edit-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.edit-form-group label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.search-input.compact {
+  padding: 10px 14px;
+  font-size: 0.92rem;
+}
+
+.cover-search-row {
+  display: flex;
+  gap: 8px;
+}
+
+.covers-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.cover-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(105px, 1fr));
+  gap: 10px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.cover-option {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 2px solid transparent;
+  cursor: pointer;
+  background: #0f1523;
+  transition: var(--transition);
+}
+
+.cover-option:hover {
+  border-color: var(--accent-cyan);
+  transform: scale(1.03);
+}
+
+.cover-option img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover-apply-tag {
+  position: absolute;
+  bottom: 0;
+  inset-inline: 0;
+  background: rgba(99, 102, 241, 0.9);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-align: center;
+  padding: 4px 0;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.cover-option:hover .cover-apply-tag {
+  opacity: 1;
+}
+
+.muted-hint {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 10px 0;
+}

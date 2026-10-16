@@ -10,21 +10,16 @@ Com o GameLauncher, basta acessar uma página pelo celular, escolher o jogo e in
 
 ## 🚀 Funcionalidades
 
-✅ Biblioteca automática de jogos  
-✅ Escaneamento recursivo de pastas  
-✅ Suporte para executáveis `.exe`  
-✅ Suporte para atalhos do Windows `.lnk`  
-✅ Suporte para atalhos de internet `.url`  
-✅ Execução remota dos jogos pela rede local  
-✅ Interface responsiva para celular e TV estilo console  
-✅ Suporte PWA (Adicione à tela inicial com abertura em tela cheia)  
-✅ Feedback tátil (vibração tátil / haptics) no celular  
-✅ Controle Remoto integrado: Volume (+/-/Mudo), Mídia, Alt+Tab, Esc, Enter  
+✅ Biblioteca automática de jogos com carregamento paralelo e banco SQLite  
+✅ Escaneamento recursivo de pastas (`.exe`, `.lnk`, `.url`)  
+✅ ⭐ Sistema de Favoritos, fila "Continuar Jogando" e contagem de Tempo de Jogo  
+✅ 🖼️ Galeria interativa SteamGridDB para trocar capas e editar nome de exibição  
+✅ 🖱️ Touchpad Virtual e Teclado Rápido integrados para controlar o cursor na TV  
+✅ 🔊 Controle de Volume com Slider (0–100%) e Troca de Saída de Áudio (TV HDMI ↔ Headset)  
+✅ 📊 Monitor de Desempenho do PC (CPU %, RAM e Uptime) em tempo real  
+✅ Detecção automática quando o jogo é fechado no PC e separação real entre `Alt+F4` (suave) e `Taskkill` (forçado)  
+✅ Execução remota dos jogos pela rede local com suporte PWA e vibração tátil (haptics)  
 ✅ Gerenciamento de Energia: Suspender e Desligar PC remotamente com aviso prévio  
-✅ Banner "Jogando Agora" com timer em tempo real e botão para fechar o jogo (Alt+F4)  
-✅ Filtros rápidos por tipo (.exe, atalho, Steam/URL) e busca em tempo real  
-✅ Download automático das capas dos jogos  
-✅ Integração com SteamGridDB para capas estilo Steam  
 
 ---
 
