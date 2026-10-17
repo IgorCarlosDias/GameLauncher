@@ -2,11 +2,11 @@
 
 title GameLauncher
 
-echo ===============================
-echo       GameLauncher
-echo ===============================
+echo ==============================================
+echo                 GameLauncher
+echo ==============================================
 
-cd /d C:\Users\igorc\GameLauncher
+cd /d "%~dp0"
 
 echo Iniciando Backend e Frontend...
 

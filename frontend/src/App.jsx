@@ -4,6 +4,7 @@ import axios from "axios";
 const SERVER_IP = import.meta.env.VITE_SERVER_IP;
 const API_PORT = import.meta.env.VITE_API_PORT;
 const API = import.meta.env.VITE_API_URL || `http://${SERVER_IP}:${API_PORT}`;
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || "0.0.1";
 
 // Haptic feedback helper for mobile touch devices
 function triggerHaptic(ms = 22) {
@@ -38,6 +39,12 @@ function formatPlayTime(seconds) {
   return `${mins}m`;
 }
 
+// Versão para listas: nunca retorna vazio ("<1m" para sessões curtas, "0m" quando não há tempo)
+function formatPlayTimeDetailed(seconds) {
+  if (!seconds || seconds <= 0) return "0m";
+  return formatPlayTime(seconds) || "<1m";
+}
+
 export default function App() {
   const [games, setGames] = useState([]);
   const [search, setSearch] = useState("");
@@ -56,6 +63,8 @@ export default function App() {
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [remoteTab, setRemoteTab] = useState("controls"); // 'controls' | 'touchpad'
   const [powerModal, setPowerModal] = useState(null); // 'sleep' | 'shutdown' | null
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showUnplayed, setShowUnplayed] = useState(false);
   const [shutdownScheduled, setShutdownScheduled] = useState(false);
 
   // System stats & audio states
@@ -467,7 +476,7 @@ export default function App() {
         const alpha = (1 - progress) * 0.65;
         ctx.beginPath();
         ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(56, 189, 248, ${alpha})`;
+        ctx.strokeStyle = `rgba(59, 130, 246, ${alpha})`;
         ctx.lineWidth = 2;
         ctx.stroke();
       }
@@ -489,15 +498,15 @@ export default function App() {
           ctx.lineTo(curr.x, curr.y);
 
           // Brilho externo ciano/índigo
-          ctx.shadowColor = "rgba(56, 189, 248, 0.85)";
+          ctx.shadowColor = "rgba(59, 130, 246, 0.85)";
           ctx.shadowBlur = 12 * life;
-          ctx.strokeStyle = `rgba(56, 189, 248, ${life * 0.85})`;
+          ctx.strokeStyle = `rgba(59, 130, 246, ${life * 0.85})`;
           ctx.lineWidth = Math.max(1.5, 9 * life);
           ctx.stroke();
 
           // Núcleo mais claro no centro do traço
           ctx.shadowBlur = 0;
-          ctx.strokeStyle = `rgba(224, 242, 254, ${life * 0.9})`;
+          ctx.strokeStyle = `rgba(219, 234, 254, ${life * 0.9})`;
           ctx.lineWidth = Math.max(0.8, 3.2 * life);
           ctx.stroke();
         }
@@ -513,9 +522,9 @@ export default function App() {
           state.currentLocalY,
           20
         );
-        grad.addColorStop(0, "rgba(224, 242, 254, 0.95)");
-        grad.addColorStop(0.35, "rgba(56, 189, 248, 0.55)");
-        grad.addColorStop(1, "rgba(99, 102, 241, 0)");
+        grad.addColorStop(0, "rgba(219, 234, 254, 0.95)");
+        grad.addColorStop(0.35, "rgba(59, 130, 246, 0.55)");
+        grad.addColorStop(1, "rgba(139, 92, 246, 0)");
 
         ctx.beginPath();
         ctx.arc(state.currentLocalX, state.currentLocalY, 20, 0, Math.PI * 2);
@@ -728,6 +737,45 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeGame]);
 
+  // Menu lateral: fecha com Esc e trava o scroll do fundo enquanto aberto
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [menuOpen]);
+
+  // Menu lateral: mostrar a biblioteca com um filtro
+  function menuShowFilter(filter) {
+    triggerHaptic(20);
+    setMenuOpen(false);
+    setRemoteOpen(false);
+    setSelectedFilter(filter);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // Menu lateral: abrir o Controle Remoto em uma aba
+  function menuOpenRemote(tab) {
+    triggerHaptic(25);
+    setMenuOpen(false);
+    setRemoteTab(tab);
+    setRemoteOpen(true);
+  }
+
+  // Menu lateral: fechar o menu e executar uma ação do sistema
+  function menuRun(action) {
+    triggerHaptic(25);
+    setMenuOpen(false);
+    action();
+  }
+
   // Jogos jogados recentemente (últimos 4 com lastPlayed)
   const recentGames = useMemo(() => {
     return [...games]
@@ -750,6 +798,36 @@ export default function App() {
       favCount: games.filter((g) => g.favorite).length,
     };
   }, [games]);
+
+  // Ranking de tempo de jogo para o menu lateral (calculado apenas com o menu aberto).
+  // O jogo em execução soma a sessão atual ao total acumulado.
+  const playTimeRanking = useMemo(() => {
+    if (!menuOpen) return { played: [], unplayed: [], totalLabel: "0m" };
+
+    const items = games.map((g) => {
+      const isActive = Boolean(activeGame && activeGame.id === g.id);
+      const total = (Number(g.playTime) || 0) + (isActive ? activeSeconds : 0);
+      return { id: g.id, name: g.name, cover: g.cover, total, isActive };
+    });
+
+    const played = items.filter((i) => i.total > 0).sort((a, b) => b.total - a.total);
+    const unplayed = items
+      .filter((i) => i.total <= 0)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const maxTotal = played[0]?.total || 1;
+    const totalSec = played.reduce((acc, i) => acc + i.total, 0);
+
+    return {
+      played: played.map((i) => ({
+        ...i,
+        label: formatPlayTimeDetailed(i.total),
+        percent: Math.max(3, Math.round((i.total / maxTotal) * 100)),
+      })),
+      unplayed,
+      totalLabel: formatPlayTimeDetailed(totalSec),
+    };
+  }, [games, menuOpen, activeGame, activeSeconds]);
 
   // Jogo em Destaque (Hero Banner): Jogo ativo, ou mais recente, ou favorito, ou o primeiro
   const heroGame = useMemo(() => {
@@ -819,19 +897,35 @@ export default function App() {
       {/* Header Fixo / Estilo Console */}
       <header className="navbar">
         <div className="navbar-container">
-          <div
-            className="brand"
-            onClick={() => {
-              setSearch("");
-              setSelectedFilter("all");
-            }}
-          >
-            <img src="/gamepad.svg" alt="GameLauncher" className="brand-logo" />
-            <div className="brand-text">
-              <h1>GameLauncher</h1>
-              <span className="online-badge">
-                <span className="badge-dot"></span> Online • {SERVER_IP}
-              </span>
+          <div className="navbar-left">
+            <button
+              className="menu-toggle"
+              onClick={() => {
+                triggerHaptic(20);
+                setMenuOpen(true);
+              }}
+              aria-label="Abrir menu"
+              aria-expanded={menuOpen}
+            >
+              <span className="menu-toggle-bar"></span>
+              <span className="menu-toggle-bar"></span>
+              <span className="menu-toggle-bar"></span>
+            </button>
+
+            <div
+              className="brand"
+              onClick={() => {
+                setSearch("");
+                setSelectedFilter("all");
+              }}
+            >
+              <img src="/gamepad.svg" alt="GameLauncher" className="brand-logo" />
+              <div className="brand-text">
+                <h1>GameLauncher</h1>
+                <span className="online-badge">
+                  <span className="badge-dot"></span> Online • {SERVER_IP}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -1454,6 +1548,20 @@ export default function App() {
             )}
           </>
         )}
+
+        {/* Rodapé da Aplicação com Versão do Sistema */}
+        <footer className="app-footer">
+          <div className="app-footer-brand">
+            <span className="app-footer-title">GameLauncher</span>
+            <span className="app-footer-version">v{APP_VERSION}</span>
+            {(window.location.port === "8070" || import.meta.env.VITE_PORT === "8070") && (
+              <span className="app-footer-badge">DEV • 8070</span>
+            )}
+          </div>
+          <p className="app-footer-meta">
+            {games.length} {games.length === 1 ? "jogo na biblioteca" : "jogos na biblioteca"} • Servidor: {SERVER_IP}
+          </p>
+        </footer>
       </main>
 
       {/* Painel Drawer / Modal: Controle Remoto do PC */}
@@ -1896,6 +2004,303 @@ export default function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Menu Lateral (Drawer) - Organiza as opções do sistema */}
+      {menuOpen && (
+        <div className="side-menu-overlay" onClick={() => setMenuOpen(false)}>
+          <aside
+            className="side-menu"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Menu principal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="side-menu-header">
+              <div className="side-menu-brand">
+                <img src="/gamepad.svg" alt="" className="side-menu-logo" />
+                <div className="side-menu-brand-text">
+                  <strong>GameLauncher</strong>
+                  <span className="online-badge">
+                    <span className="badge-dot"></span> Online • {SERVER_IP}
+                  </span>
+                </div>
+              </div>
+              <button
+                className="side-menu-close"
+                onClick={() => setMenuOpen(false)}
+                aria-label="Fechar menu"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="side-menu-body">
+              {/* Biblioteca */}
+              <div className="side-menu-section">
+                <span className="side-menu-title">Biblioteca</span>
+                <button
+                  className={`side-menu-item ${!remoteOpen && selectedFilter === "all" ? "active" : ""}`}
+                  onClick={() => menuShowFilter("all")}
+                >
+                  <span className="side-menu-icon">🏠</span>
+                  <span className="side-menu-label">Início</span>
+                  <span className="side-menu-count">{counts.all}</span>
+                </button>
+                <button
+                  className={`side-menu-item ${!remoteOpen && selectedFilter === "fav" ? "active" : ""}`}
+                  onClick={() => menuShowFilter("fav")}
+                >
+                  <span className="side-menu-icon">⭐</span>
+                  <span className="side-menu-label">Favoritos</span>
+                  <span className="side-menu-count">{counts.fav}</span>
+                </button>
+                {counts.exe > 0 && (
+                  <button
+                    className={`side-menu-item ${!remoteOpen && selectedFilter === ".exe" ? "active" : ""}`}
+                    onClick={() => menuShowFilter(".exe")}
+                  >
+                    <span className="side-menu-icon">💽</span>
+                    <span className="side-menu-label">Executáveis</span>
+                    <span className="side-menu-count">{counts.exe}</span>
+                  </button>
+                )}
+                {counts.lnk > 0 && (
+                  <button
+                    className={`side-menu-item ${!remoteOpen && selectedFilter === ".lnk" ? "active" : ""}`}
+                    onClick={() => menuShowFilter(".lnk")}
+                  >
+                    <span className="side-menu-icon">🔗</span>
+                    <span className="side-menu-label">Atalhos</span>
+                    <span className="side-menu-count">{counts.lnk}</span>
+                  </button>
+                )}
+                {counts.url > 0 && (
+                  <button
+                    className={`side-menu-item ${!remoteOpen && selectedFilter === ".url" ? "active" : ""}`}
+                    onClick={() => menuShowFilter(".url")}
+                  >
+                    <span className="side-menu-icon">🌐</span>
+                    <span className="side-menu-label">Steam / Web</span>
+                    <span className="side-menu-count">{counts.url}</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Exibição */}
+              <div className="side-menu-section">
+                <span className="side-menu-title">Exibição</span>
+                <div className="side-menu-segment" role="group" aria-label="Modo de visualização">
+                  <button
+                    className={`side-menu-segment-btn ${viewMode === "poster" ? "active" : ""}`}
+                    onClick={() => {
+                      triggerHaptic(15);
+                      setViewMode("poster");
+                    }}
+                  >
+                    ⊞ Grade
+                  </button>
+                  <button
+                    className={`side-menu-segment-btn ${viewMode === "list" ? "active" : ""}`}
+                    onClick={() => {
+                      triggerHaptic(15);
+                      setViewMode("list");
+                    }}
+                  >
+                    ☰ Lista
+                  </button>
+                </div>
+                {[
+                  { value: "default", icon: "⭐", label: "Destaques & Favoritos" },
+                  { value: "recent", icon: "⏱️", label: "Mais Recentes" },
+                  { value: "playtime", icon: "🔥", label: "Mais Jogados" },
+                  { value: "az", icon: "🔤", label: "Nome (A-Z)" },
+                ].map((opt) => (
+                  <button
+                    key={opt.value}
+                    className={`side-menu-item compact ${sortBy === opt.value ? "active" : ""}`}
+                    onClick={() => {
+                      triggerHaptic(15);
+                      setSortBy(opt.value);
+                    }}
+                  >
+                    <span className="side-menu-icon">{opt.icon}</span>
+                    <span className="side-menu-label">{opt.label}</span>
+                    {sortBy === opt.value && <span className="side-menu-check">✓</span>}
+                  </button>
+                ))}
+              </div>
+
+              {/* Tempo de Jogo */}
+              <div className="side-menu-section">
+                <div className="side-menu-title-row">
+                  <span className="side-menu-title">Tempo de Jogo</span>
+                  <span className="side-menu-title-total">
+                    Total: {playTimeRanking.totalLabel}
+                  </span>
+                </div>
+
+                {playTimeRanking.played.length === 0 ? (
+                  <p className="side-menu-empty">Nenhum jogo jogado ainda.</p>
+                ) : (
+                  <ul className="playtime-list">
+                    {playTimeRanking.played.map((item) => (
+                      <li
+                        key={item.id}
+                        className={`playtime-row ${item.isActive ? "live" : ""}`}
+                      >
+                        {item.cover ? (
+                          <img
+                            src={`${API}/covers/${item.cover}`}
+                            alt=""
+                            className="playtime-thumb"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <span className="playtime-thumb placeholder">🎮</span>
+                        )}
+                        <div className="playtime-info">
+                          <div className="playtime-line">
+                            <span className="playtime-name" title={item.name}>
+                              {item.name}
+                            </span>
+                            <span className="playtime-value">
+                              {item.isActive && <span className="dock-pulse-dot static" />}
+                              {item.label}
+                            </span>
+                          </div>
+                          <div className="playtime-bar">
+                            <span
+                              className="playtime-bar-fill"
+                              style={{ width: `${item.percent}%` }}
+                            />
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {playTimeRanking.unplayed.length > 0 && (
+                  <>
+                    <button
+                      className="side-menu-item compact"
+                      onClick={() => {
+                        triggerHaptic(15);
+                        setShowUnplayed((prev) => !prev);
+                      }}
+                      aria-expanded={showUnplayed}
+                    >
+                      <span className="side-menu-icon">{showUnplayed ? "▾" : "▸"}</span>
+                      <span className="side-menu-label">
+                        {showUnplayed ? "Ocultar" : "Mostrar"} não jogados
+                      </span>
+                      <span className="side-menu-count">{playTimeRanking.unplayed.length}</span>
+                    </button>
+
+                    {showUnplayed && (
+                      <ul className="playtime-list">
+                        {playTimeRanking.unplayed.map((item) => (
+                          <li key={item.id} className="playtime-row unplayed">
+                            {item.cover ? (
+                              <img
+                                src={`${API}/covers/${item.cover}`}
+                                alt=""
+                                className="playtime-thumb"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <span className="playtime-thumb placeholder">🎮</span>
+                            )}
+                            <div className="playtime-info">
+                              <div className="playtime-line">
+                                <span className="playtime-name" title={item.name}>
+                                  {item.name}
+                                </span>
+                                <span className="playtime-value">—</span>
+                              </div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* Controle do PC */}
+              <div className="side-menu-section">
+                <span className="side-menu-title">Controle do PC</span>
+                <button
+                  className={`side-menu-item ${remoteOpen && remoteTab === "controls" ? "active" : ""}`}
+                  onClick={() => menuOpenRemote("controls")}
+                >
+                  <span className="side-menu-icon">🎛️</span>
+                  <span className="side-menu-label">Áudio & Sistema</span>
+                </button>
+                <button
+                  className={`side-menu-item ${remoteOpen && remoteTab === "touchpad" ? "active" : ""}`}
+                  onClick={() => menuOpenRemote("touchpad")}
+                >
+                  <span className="side-menu-icon">🖱️</span>
+                  <span className="side-menu-label">Touchpad & Teclado</span>
+                </button>
+                {activeGame && (
+                  <button
+                    className="side-menu-item warning"
+                    onClick={() => menuRun(() => closeActiveGame(false))}
+                    title="Envia Alt+F4 suave para o jogo em execução"
+                  >
+                    <span className="side-menu-icon">✕</span>
+                    <span className="side-menu-label">Fechar jogo atual (Alt+F4)</span>
+                    <span className="dock-pulse-dot static" />
+                  </button>
+                )}
+              </div>
+
+              {/* Sistema */}
+              <div className="side-menu-section">
+                <span className="side-menu-title">Sistema</span>
+                <button
+                  className="side-menu-item"
+                  onClick={() => menuRun(refreshGames)}
+                  disabled={refreshing}
+                >
+                  <span className="side-menu-icon">🔄</span>
+                  <span className="side-menu-label">
+                    {refreshing ? "Atualizando..." : "Atualizar biblioteca"}
+                  </span>
+                </button>
+                <button
+                  className="side-menu-item warning"
+                  onClick={() => menuRun(() => setPowerModal("sleep"))}
+                >
+                  <span className="side-menu-icon">💤</span>
+                  <span className="side-menu-label">Suspender PC</span>
+                </button>
+                <button
+                  className="side-menu-item danger"
+                  onClick={() => menuRun(() => setPowerModal("shutdown"))}
+                >
+                  <span className="side-menu-icon">🛑</span>
+                  <span className="side-menu-label">Desligar PC</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="side-menu-footer">
+              <span className="side-menu-footer-count">
+                {games.length} {games.length === 1 ? "jogo" : "jogos"}
+              </span>
+              <span className="side-menu-footer-version">
+                v{APP_VERSION}
+                {(window.location.port === "8070" || import.meta.env.VITE_PORT === "8070") && (
+                  <span className="side-menu-dev-tag">DEV</span>
+                )}
+              </span>
+            </div>
+          </aside>
         </div>
       )}
 

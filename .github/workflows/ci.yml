@@ -1,0 +1,38 @@
+name: CI / Build & Lint
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main, dev ]
+
+jobs:
+  validate:
+    name: Lint, Syntax & Build Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 📦 Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci || npm install
+
+      - name: 🔍 Lint Frontend (Oxlint)
+        working-directory: frontend
+        run: npm run lint
+
+      - name: 🏗️ Build Frontend (Vite)
+        working-directory: frontend
+        run: npm run build
+
+      - name: 🛡️ Verify Backend Syntax
+        run: node --check backend/server.js

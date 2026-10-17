@@ -4,10 +4,13 @@
   "devDependencies": {
     "concurrently": "^10.0.3"
   },
+  "version": "0.0.1",
   "scripts": {
-    "dev": "concurrently \"cd backend && node server.js\" \"cd frontend && npm run dev -- --host 0.0.0.0\""
+    "dev": "concurrently \"cd backend && node server.js\" \"cd frontend && npm run dev -- --host 0.0.0.0\"",
+    "start": "concurrently \"cd backend && node server.js\" \"cd frontend && npm run preview -- --host 0.0.0.0\"",
+    "build": "cd frontend && npm run build",
+    "lint": "cd frontend && npm run lint"
   },
-  "version": "1.0.0",
   "description": "",
   "main": "index.js",
   "dependencies": {
