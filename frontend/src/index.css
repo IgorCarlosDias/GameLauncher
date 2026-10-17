@@ -2873,24 +2873,53 @@ body {
 }
 
 .navbar .btn {
-  padding: 14px 22px;
-  font-size: 1rem;
+  padding: 12px 20px;
+  font-size: 0.95rem;
   border-radius: var(--radius-lg);
+}
+
+.navbar .btn-refresh {
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border-radius: 14px;
+  font-size: 1.15rem;
+  flex-shrink: 0;
 }
 
 @media (max-width: 480px) {
   .navbar {
-    padding: calc(env(safe-area-inset-top, 0px) + 14px) 14px 14px;
+    padding: calc(env(safe-area-inset-top, 0px) + 10px) 12px 10px;
   }
 
-  .navbar-container { min-height: 52px; gap: 10px; }
-  .brand { gap: 10px; }
-  .brand-logo { width: 44px; height: 44px; }
-  .brand-text h1 { font-size: 1.3rem; }
-  .navbar .online-badge { font-size: 0.74rem; }
-  .navbar .menu-toggle { width: 46px; height: 46px; }
-  .navbar-actions { gap: 8px; }
-  .navbar .btn { padding: 14px 16px; font-size: 1.1rem; }
+  .navbar-container { min-height: 48px; gap: 8px; }
+  .navbar-left { gap: 8px; min-width: 0; flex: 1; }
+  .brand { gap: 8px; min-width: 0; flex: 1; }
+  .brand-logo { width: 38px; height: 38px; flex-shrink: 0; }
+  .brand-text { min-width: 0; overflow: hidden; }
+  .brand-text h1 {
+    font-size: 1.12rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .navbar .online-badge {
+    font-size: 0.68rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .navbar .menu-toggle { width: 42px; height: 42px; flex-shrink: 0; }
+  .navbar-actions { gap: 6px; flex-shrink: 0; }
+  .navbar .btn-remote,
+  .navbar .btn-refresh {
+    width: 42px;
+    height: 42px;
+    padding: 0;
+    font-size: 1.1rem;
+    border-radius: 12px;
+    justify-content: center;
+  }
 }
 
 /* ===== Menu Lateral: Tempo de Jogo ===== */
@@ -3066,5 +3095,386 @@ body {
   margin: 0;
   font-size: 0.78rem;
   color: var(--text-dim);
+}
+
+/* ===== Otimizações Responsivas Mobile (Smartphones & Telas Compactas) ===== */
+@keyframes launchToastInMobile {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 14px 12px 96px;
+  }
+
+  /* Notificação de jogo iniciado posicionada acima do dock inferior */
+  .launch-notification-toast {
+    top: auto;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 78px);
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: none;
+    animation: launchToastInMobile 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  .launch-toast-body {
+    padding: 12px 14px;
+    gap: 12px;
+  }
+
+  .launch-toast-thumb {
+    width: 44px;
+    height: 58px;
+  }
+
+  .launch-toast-title {
+    font-size: 0.96rem;
+  }
+
+  /* Banner Sticky Jogando Agora otimizado para mobile */
+  .active-game-banner {
+    padding: 10px 12px;
+  }
+
+  .banner-multi-alert {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+  }
+
+  .banner-multi-badge {
+    align-self: flex-start;
+    font-size: 0.68rem;
+    padding: 3px 8px;
+  }
+
+  .banner-multi-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .banner-multi-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .banner-tab-btn {
+    flex-shrink: 0;
+    font-size: 0.76rem;
+    padding: 5px 10px;
+  }
+
+  .banner-content {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .banner-game-info {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .banner-titles {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .banner-name {
+    max-width: 100%;
+    font-size: 0.98rem;
+  }
+
+  .banner-buttons {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+  }
+
+  .banner-buttons .btn-close-taskkill {
+    flex: 1;
+    justify-content: center;
+    padding: 10px 12px;
+    font-size: 0.85rem;
+  }
+
+  .banner-buttons .btn-dismiss {
+    padding: 10px 14px;
+    font-size: 0.82rem;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-color);
+  }
+
+  /* Hero Spotlight compacto e proporcional no mobile */
+  .hero-spotlight {
+    margin-bottom: 16px;
+    border-radius: var(--radius-md);
+  }
+
+  .hero-content {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .hero-poster-container {
+    width: 82px;
+    flex-shrink: 0;
+  }
+
+  .hero-info {
+    flex: 1;
+    min-width: calc(100% - 98px);
+    gap: 6px;
+  }
+
+  .hero-title {
+    font-size: 1.15rem;
+    line-height: 1.22;
+  }
+
+  .hero-stats {
+    gap: 8px;
+  }
+
+  .hero-stat-item {
+    font-size: 0.74rem;
+  }
+
+  .hero-actions {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .btn-hero-play {
+    flex: 1;
+    justify-content: center;
+    padding: 10px 14px;
+    font-size: 0.88rem;
+  }
+
+  .btn-hero-icon {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+  }
+
+  .hero-actions .btn-close-taskkill {
+    width: 100%;
+    justify-content: center;
+    padding: 10px 12px;
+    font-size: 0.84rem;
+  }
+
+  /* Estatísticas do Perfil Gamer em grade 2x2 no mobile */
+  .gamer-profile-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .profile-stat-card {
+    padding: 10px 11px;
+    gap: 9px;
+  }
+
+  .profile-stat-icon {
+    font-size: 1.3rem;
+  }
+
+  .profile-stat-number {
+    font-size: 0.86rem;
+  }
+
+  .profile-stat-sub {
+    font-size: 0.67rem;
+  }
+
+  /* Busca, Filtros e Ordenação */
+  .search-section {
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+
+  .search-input {
+    padding: 12px 40px;
+    font-size: 16px; /* Evita auto-zoom no iOS/Android */
+  }
+
+  .filters-and-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .filters-bar {
+    width: 100%;
+    padding-bottom: 2px;
+  }
+
+  .view-controls {
+    width: 100%;
+    margin-left: 0;
+    justify-content: space-between;
+  }
+
+  .sort-select {
+    flex: 1;
+    font-size: 0.82rem;
+    padding: 8px 12px;
+  }
+
+  /* Grade de Pôsteres (2 colunas perfeitamente alinhadas) */
+  .poster-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .poster-card:hover {
+    transform: none;
+  }
+
+  .card-overlay-actions {
+    top: 6px;
+    left: 6px;
+    gap: 5px;
+  }
+
+  .btn-card-action {
+    width: 30px;
+    height: 30px;
+    font-size: 0.82rem;
+  }
+
+  .badge-running-pill {
+    top: 6px;
+    right: 6px;
+    font-size: 0.58rem;
+    padding: 2px 6px;
+  }
+
+  .poster-bottom-details {
+    padding: 9px;
+    gap: 4px;
+  }
+
+  .poster-game-title {
+    font-size: 0.84rem;
+  }
+
+  .poster-stat-pill {
+    font-size: 0.66rem;
+  }
+
+  .btn-play-poster {
+    padding: 8px 8px;
+    font-size: 0.78rem;
+    min-height: 34px;
+  }
+
+  /* Visualização em Lista Compacta */
+  .list-item-card {
+    padding: 9px 10px;
+    gap: 10px;
+  }
+
+  .list-item-card:hover {
+    transform: none;
+  }
+
+  .list-item-name {
+    font-size: 0.86rem;
+  }
+
+  .list-item-actions {
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .btn-list-action {
+    width: 32px;
+    height: 32px;
+    font-size: 0.85rem;
+  }
+
+  .btn-list-play {
+    padding: 7px 10px;
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  /* Dock Inferior Flutuante com suporte a Safe Area */
+  .bottom-dock {
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+    width: calc(100vw - 24px);
+    max-width: 420px;
+    justify-content: space-between;
+    padding: 5px 8px;
+    gap: 4px;
+  }
+
+  .dock-btn {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 4px;
+  }
+
+  .dock-icon {
+    font-size: 1.15rem;
+  }
+
+  .dock-label {
+    font-size: 0.64rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  /* Modais e Gavetas */
+  .modal-backdrop {
+    padding: 12px;
+  }
+
+  .modal-dialog {
+    width: 100%;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    padding: 18px;
+  }
+
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .modal-actions .btn {
+    flex: 1;
+    justify-content: center;
+    padding: 11px 12px;
+    font-size: 0.88rem;
+  }
+
+  .side-menu {
+    width: min(86vw, 330px);
+  }
 }
 
