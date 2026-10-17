@@ -126,6 +126,7 @@ setInterval(() => {
 
 let games = [];
 let activeGame = null;
+const activeGames = new Map();
 
 // =========================
 // BUSCA ARQUIVOS RECURSIVO
@@ -356,7 +357,7 @@ async function syncSteamPlaytimesInMemory(force = false) {
 
   for (const game of games) {
     if (!game.steamId) continue;
-    if (activeGame && activeGame.id === game.id) continue;
+    if (activeGames.has(game.id) || (activeGame && activeGame.id === game.id)) continue;
 
     const st = steamMap.get(String(game.steamId));
     if (!st) continue;
@@ -527,10 +528,17 @@ async function loadGames() {
 }
 
 // Encerra sessão ativa e grava tempo jogado no SQLite
-async function finishActiveGameSession() {
-  if (!activeGame) return null;
-  const closed = { ...activeGame };
-  activeGame = null;
+async function finishActiveGameSession(targetId = null) {
+  const target = targetId
+    ? activeGames.get(targetId) || (activeGame && activeGame.id === targetId ? activeGame : null)
+    : (activeGame || activeGames.values().next().value);
+
+  if (!target) return null;
+  const closed = { ...target };
+  activeGames.delete(closed.id);
+  if (activeGame && activeGame.id === closed.id) {
+    activeGame = activeGames.values().next().value || null;
+  }
 
   try {
     const startedMs = new Date(closed.startedAt).getTime();
@@ -712,15 +720,15 @@ function buildExecutableIndex() {
   return byExe;
 }
 
-// Procura um jogo da biblioteca que esteja rodando no PC sem ter sido iniciado pelo launcher
-async function detectExternalGame() {
-  if (games.length === 0) return null;
+// Procura todos os jogos da biblioteca que estejam rodando no PC sem ter sido iniciados pelo launcher
+async function detectExternalGames() {
+  if (games.length === 0) return [];
 
   const [steamAppId, processes] = await Promise.all([
     getSteamRunningAppId(),
     listRunningProcesses(),
   ]);
-  if (!processes) return null; // falha ao listar processos: não altera nada
+  if (!processes) return []; // falha ao listar processos: não altera nada
 
   const candidates = [];
 
@@ -753,25 +761,28 @@ async function detectExternalGame() {
     }
   }
 
+  const valid = [];
   for (const candidate of candidates) {
     const ignored = ignoredDetections.get(candidate.game.id);
     if (ignored && (ignored.until > now || ignored.tokens === null || ignored.tokens.has(candidate.token))) {
       continue;
     }
-    return candidate;
+    valid.push(candidate);
   }
 
-  return null;
+  return valid;
 }
 
-// Passa a monitorar como "jogo ativo" um jogo encontrado em execução
+const detectExternalGame = async () => (await detectExternalGames())[0] || null;
+
+// Passa a monitorar um jogo encontrado em execução
 async function adoptDetectedGame({ game, via, pid }) {
-  if (activeGame) return;
+  if (activeGames.has(game.id)) return;
 
   const startedAt = (pid && (await getProcessStartTime(pid))) || new Date().toISOString();
-  if (activeGame) return; // um jogo foi iniciado pelo launcher enquanto detectávamos
+  if (activeGames.has(game.id)) return;
 
-  activeGame = {
+  const newActive = {
     id: game.id,
     name: game.name,
     file: game.file,
@@ -786,6 +797,9 @@ async function adoptDetectedGame({ game, via, pid }) {
     source: "auto",
     detectedBy: via,
   };
+
+  activeGames.set(game.id, newActive);
+  if (!activeGame) activeGame = newActive;
 
   try {
     await dbRun(
@@ -952,11 +966,6 @@ app.post("/play", async (req, res) => {
     });
   }
 
-  // Se já havia outro jogo ativo, fecha a contagem da sessão anterior
-  if (activeGame && activeGame.id !== game.id) {
-    await finishActiveGameSession();
-  }
-
   // Iniciado pelo launcher: volta a ser monitorado normalmente
   ignoredDetections.delete(game.id);
 
@@ -966,23 +975,33 @@ app.post("/play", async (req, res) => {
     let exeName = game.resolvedExe;
     let steamId = game.steamId;
 
-    if (!exeName) {
-      if (game.extension === ".lnk") {
-        const shortcut = await resolveShortcut(game.file);
-        exeName = shortcut?.target ? path.basename(shortcut.target) : path.basename(game.file, ".lnk") + ".exe";
-      } else if (game.extension === ".url") {
-        exeName = path.basename(game.file, ".url") + ".exe";
-      } else {
-        exeName = path.basename(game.file);
+    let targetPath = game.file;
+    let workingDir = path.dirname(game.file);
+
+    if (game.extension === ".lnk") {
+      const shortcut = await resolveShortcut(game.file);
+      if (shortcut?.target) {
+        if (!exeName) exeName = path.basename(shortcut.target);
+        if (fs.existsSync(shortcut.target)) {
+          targetPath = shortcut.target;
+          workingDir = (shortcut.workingDir && fs.existsSync(shortcut.workingDir))
+            ? shortcut.workingDir
+            : path.dirname(shortcut.target);
+        }
+      } else if (!exeName) {
+        exeName = path.basename(game.file, ".lnk") + ".exe";
       }
+    } else if (game.extension === ".url") {
+      if (!exeName) exeName = path.basename(game.file, ".url") + ".exe";
+    } else {
+      if (!exeName) exeName = path.basename(game.file);
     }
 
-    // Inicia o jogo pelo Windows Desktop Shell
-    try {
-      await runSysControl("launch", `"${game.file}"`);
-    } catch (launchErr) {
-      console.warn("Fallback para cmd start:", launchErr.message);
-      exec(`cmd /c start "" "${game.file}"`, { cwd: path.dirname(game.file) });
+    // Inicia o jogo
+    if (game.extension === ".url" && steamId) {
+      exec(`cmd /c start "" "steam://rungameid/${steamId}"`);
+    } else {
+      exec(`cmd /c start "" "${targetPath}"`, { cwd: workingDir });
     }
 
     const nowIso = new Date().toISOString();
@@ -993,7 +1012,7 @@ app.post("/play", async (req, res) => {
     game.playCount = (game.playCount || 0) + 1;
     game.lastPlayed = nowIso;
 
-    activeGame = {
+    const newActiveGame = {
       id: game.id,
       name: game.name,
       file: game.file,
@@ -1007,14 +1026,18 @@ app.post("/play", async (req, res) => {
       seenRunning: false,
     };
 
+    activeGames.set(game.id, newActiveGame);
+    activeGame = newActiveGame;
+
     // Detecta o PID nos primeiros segundos
     setTimeout(async () => {
-      if (activeGame && activeGame.id === game.id && !activeGame.pid && exeName) {
+      const target = activeGames.get(game.id);
+      if (target && !target.pid && exeName) {
         const detectedPid = await findProcessPid(exeName);
-        if (detectedPid && activeGame) {
-          activeGame.pid = detectedPid;
-          activeGame.seenRunning = true;
-          console.log(`PID detectado para ${activeGame.name}: ${detectedPid}`);
+        if (detectedPid && activeGames.has(game.id)) {
+          target.pid = detectedPid;
+          target.seenRunning = true;
+          console.log(`PID detectado para ${target.name}: ${detectedPid}`);
         }
       }
     }, 2000);
@@ -1022,7 +1045,9 @@ app.post("/play", async (req, res) => {
     res.json({
       success: true,
       game: game.name,
-      activeGame,
+      activeGame: newActiveGame,
+      activeGames: Array.from(activeGames.values()),
+      count: activeGames.size,
     });
   } catch (error) {
     console.error("Erro ao abrir jogo:", error);
@@ -1037,9 +1062,9 @@ app.post("/play", async (req, res) => {
 // CONTROLE REMOTO DO SISTEMA
 // =========================
 
-// Sincroniza o estado do jogo ativo com os processos reais do Windows:
-//  - com jogo ativo: confirma que ainda está rodando e encerra a sessão quando fechar;
-//  - sem jogo ativo: tenta detectar um jogo aberto fora do launcher.
+// Sincroniza o estado dos jogos ativos com os processos reais do Windows:
+//  - para cada jogo ativo: confirma que ainda está rodando e encerra a respectiva sessão quando fechar;
+//  - varre o sistema para detectar novos jogos abertos (fora do launcher ou simultâneos).
 let syncingActiveGame = null;
 
 function syncActiveGameState() {
@@ -1047,50 +1072,63 @@ function syncActiveGameState() {
 
   syncingActiveGame = (async () => {
     try {
-      if (activeGame) {
-        const ageMs = Date.now() - new Date(activeGame.startedAt).getTime();
+      const runningSteamAppId = await getSteamRunningAppId();
 
-        if (activeGame.steamId && activeGame.extension === ".url") {
-          // Jogos Steam (.url): o Registro da Steam informa qual AppID está em execução
-          const runningAppId = await getSteamRunningAppId();
-          if (activeGame && runningAppId === activeGame.steamId) {
-            activeGame.seenRunning = true;
-          } else if (activeGame && activeGame.seenRunning) {
-            console.log(`[Auto-Detect] O jogo ${activeGame.name} (Steam) foi fechado no PC.`);
-            await finishActiveGameSession();
+      // 1. Verifica individualmente cada jogo monitorado em activeGames
+      for (const [gameId, ag] of Array.from(activeGames.entries())) {
+        const ageMs = Date.now() - new Date(ag.startedAt).getTime();
+
+        if (ag.steamId && ag.extension === ".url") {
+          if (runningSteamAppId === ag.steamId) {
+            ag.seenRunning = true;
+          } else if (ag.seenRunning) {
+            console.log(`[Auto-Detect] O jogo ${ag.name} (Steam) foi fechado no PC.`);
+            await finishActiveGameSession(gameId);
           }
-        } else if (activeGame.pid) {
-          const alive = await isPidRunning(activeGame.pid);
+        } else if (ag.pid) {
+          const alive = await isPidRunning(ag.pid);
           if (alive) {
-            activeGame.seenRunning = true;
+            ag.seenRunning = true;
           } else {
-            // Verifica se outro processo com o mesmo exeName assumiu (ex.: launcher -> jogo)
-            const newPid = await findProcessPid(activeGame.exeName);
+            const newPid = await findProcessPid(ag.exeName);
             if (newPid) {
-              activeGame.pid = newPid;
-              activeGame.seenRunning = true;
-            } else if (activeGame.seenRunning || ageMs > 25000) {
-              console.log(`[Auto-Detect] O jogo ${activeGame.name} foi fechado no PC.`);
-              await finishActiveGameSession();
+              ag.pid = newPid;
+              ag.seenRunning = true;
+            } else if (ag.seenRunning || ageMs > 25000) {
+              console.log(`[Auto-Detect] O jogo ${ag.name} foi fechado no PC.`);
+              await finishActiveGameSession(gameId);
             }
           }
-        } else if (activeGame.exeName) {
-          const detectedPid = await findProcessPid(activeGame.exeName);
-          if (detectedPid && activeGame) {
-            activeGame.pid = detectedPid;
-            activeGame.seenRunning = true;
-          } else if (activeGame.extension !== ".url" && ageMs > 30000) {
-            // Jogos .exe/.lnk que não estão mais rodando após 30s do início
-            console.log(`[Auto-Detect] Processo ${activeGame.exeName} não encontrado após 30s.`);
-            await finishActiveGameSession();
+        } else if (ag.exeName) {
+          const detectedPid = await findProcessPid(ag.exeName);
+          if (detectedPid) {
+            ag.pid = detectedPid;
+            ag.seenRunning = true;
+          } else if (ag.extension !== ".url" && ageMs > 30000) {
+            console.log(`[Auto-Detect] Processo ${ag.exeName} não encontrado após 30s.`);
+            await finishActiveGameSession(gameId);
           }
         }
+      }
+
+      // 2. Busca todos os jogos da biblioteca atualmente em execução no Windows
+      const candidates = await detectExternalGames();
+      for (const candidate of candidates) {
+        if (!activeGames.has(candidate.game.id)) {
+          await adoptDetectedGame(candidate);
+        }
+      }
+
+      // 3. Mantém activeGame coerente para rotas e componentes retrocompatíveis
+      if (activeGames.size > 0) {
+        if (!activeGame || !activeGames.has(activeGame.id)) {
+          activeGame = activeGames.values().next().value;
+        }
       } else {
-        const candidate = await detectExternalGame();
-        if (candidate) await adoptDetectedGame(candidate);
+        activeGame = null;
       }
     } catch (err) {
-      console.error("Erro sincronizando jogo ativo:", err.message);
+      console.error("Erro sincronizando jogos ativos:", err.message);
     } finally {
       syncingActiveGame = null;
     }
@@ -1099,12 +1137,16 @@ function syncActiveGameState() {
   return syncingActiveGame;
 }
 
-// Consulta jogo em execução + detecção automática de abertura/fechamento
+// Consulta jogos em execução (suporta múltiplos) + detecção automática de abertura/fechamento
 app.get("/system/active-game", async (req, res) => {
   await syncActiveGameState();
 
+  const list = Array.from(activeGames.values());
   res.json({
-    activeGame,
+    activeGame: activeGame || list[0] || null,
+    activeGames: list,
+    hasMultiple: list.length > 1,
+    count: list.length,
   });
 });
 
@@ -1114,7 +1156,7 @@ setInterval(syncActiveGameState, ACTIVE_GAME_MONITOR_INTERVAL_MS);
 // Fechar jogo: separa fechamento suave (Alt+F4) de fechamento forçado (Taskkill)
 app.post("/system/close-game", async (req, res) => {
   const { force = true, id, exeName: customExe } = req.body || {};
-  const current = activeGame;
+  const current = (id && activeGames.get(id)) || activeGame;
 
   // Modo suave (Alt+F4): envia apenas Alt+F4 para a janela em foco sem matar o processo com taskkill
   if (!force) {
@@ -1124,21 +1166,23 @@ app.post("/system/close-game", async (req, res) => {
 
     // Verifica após 1.5s se o processo encerrou; de qualquer forma registra a sessão
     setTimeout(async () => {
-      if (activeGame) {
-        const stillAlive = activeGame.pid
-          ? await isPidRunning(activeGame.pid)
-          : await findProcessPid(activeGame.exeName);
+      const targetToCheck = (id && activeGames.get(id)) || activeGame;
+      if (targetToCheck) {
+        const stillAlive = targetToCheck.pid
+          ? await isPidRunning(targetToCheck.pid)
+          : await findProcessPid(targetToCheck.exeName);
         if (!stillAlive) {
-          await finishActiveGameSession();
+          await finishActiveGameSession(targetToCheck.id);
         }
       }
     }, 1500);
 
-    const closed = await finishActiveGameSession();
+    const closed = await finishActiveGameSession(id || current?.id);
     return res.json({
       success: true,
       message: current ? `Alt+F4 enviado para ${current.name}.` : "Alt+F4 enviado para a janela atual.",
       closed,
+      activeGames: Array.from(activeGames.values()),
     });
   }
 
@@ -1179,19 +1223,27 @@ app.post("/system/close-game", async (req, res) => {
     } catch {}
   }
 
-  const closed = await finishActiveGameSession();
+  const closed = await finishActiveGameSession(id || current?.id);
 
   res.json({
     success: true,
     message: current ? `Jogo ${current.name} encerrado via Taskkill.` : "Processo em primeiro plano encerrado.",
     closed,
+    activeGames: Array.from(activeGames.values()),
   });
 });
 
 // Limpar estado do jogo ativo manualmente (salva sessão até o momento)
 app.post("/system/clear-active", async (req, res) => {
-  await finishActiveGameSession();
-  res.json({ success: true });
+  const { id } = req.body || {};
+  if (id) {
+    await finishActiveGameSession(id);
+  } else {
+    for (const gId of Array.from(activeGames.keys())) {
+      await finishActiveGameSession(gId);
+    }
+  }
+  res.json({ success: true, activeGames: [] });
 });
 
 // Monitor de Desempenho do PC (CPU, RAM, Uptime)

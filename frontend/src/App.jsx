@@ -4,7 +4,7 @@ import axios from "axios";
 const SERVER_IP = import.meta.env.VITE_SERVER_IP;
 const API_PORT = import.meta.env.VITE_API_PORT;
 const API = import.meta.env.VITE_API_URL || `http://${SERVER_IP}:${API_PORT}`;
-const APP_VERSION = import.meta.env.VITE_APP_VERSION || "0.0.1";
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || "0.0.2";
 
 // Haptic feedback helper for mobile touch devices
 function triggerHaptic(ms = 22) {
@@ -56,13 +56,22 @@ export default function App() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState(null);
   const [launchingId, setLaunchingId] = useState(null);
+  const [launchNotification, setLaunchNotification] = useState(null); // { name, cover, playTime }
 
   // Active game & remote states
   const [activeGame, setActiveGame] = useState(null);
+  const [activeGames, setActiveGames] = useState([]);
   const [activeSeconds, setActiveSeconds] = useState(0);
+
+  function getGameActiveSeconds(ag) {
+    if (!ag?.startedAt) return 0;
+    const diff = Math.floor((Date.now() - new Date(ag.startedAt).getTime()) / 1000);
+    return diff > 0 ? diff : 0;
+  }
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [remoteTab, setRemoteTab] = useState("controls"); // 'controls' | 'touchpad'
   const [powerModal, setPowerModal] = useState(null); // 'sleep' | 'shutdown' | null
+  const [forceCloseModal, setForceCloseModal] = useState(null); // null | true | { id, exeName }
   const [menuOpen, setMenuOpen] = useState(false);
   const [showUnplayed, setShowUnplayed] = useState(false);
   const [shutdownScheduled, setShutdownScheduled] = useState(false);
@@ -132,17 +141,28 @@ export default function App() {
     }
   }
 
-  // Verificar se há jogo ativo rodando
+  // Verificar se há jogos ativos rodando
   async function checkActiveGame() {
     try {
       const response = await axios.get(`${API}/system/active-game`);
       const serverActive = response.data?.activeGame || null;
+      const serverList = Array.isArray(response.data?.activeGames)
+        ? response.data.activeGames
+        : serverActive
+        ? [serverActive]
+        : [];
+
+      setActiveGames(serverList);
       setActiveGame((prev) => {
-        if (prev && !serverActive) {
-          // Jogo acabou de fechar no PC; recarrega biblioteca para atualizar tempo de jogo
+        if (prev && serverList.length === 0) {
           loadGames(false);
+          return null;
         }
-        return serverActive;
+        if (prev && !serverList.some((g) => g.id === prev.id)) {
+          loadGames(false);
+          return serverList[0] || null;
+        }
+        return prev || serverActive || serverList[0] || null;
       });
     } catch {
       // Ignora falha de polling silencioso
@@ -169,17 +189,19 @@ export default function App() {
     }
   }
 
-  // Atualizar biblioteca
+  // Atualizar biblioteca e detectar jogos em execução
   async function refreshGames() {
     triggerHaptic(30);
     setRefreshing(true);
-    showToast("Escaneando biblioteca de jogos...", "info");
+    showToast("Escaneando biblioteca e verificando jogos em execução...", "info");
     try {
       await axios.post(`${API}/refresh`);
-      await loadGames(true);
+      await Promise.all([loadGames(true), checkActiveGame()]);
+      showToast("Biblioteca e jogos em execução atualizados!", "success");
     } catch (err) {
       console.error("Erro ao atualizar:", err);
       showToast("Falha ao atualizar biblioteca", "error");
+    } finally {
       setRefreshing(false);
     }
   }
@@ -278,8 +300,14 @@ export default function App() {
           }
         );
         setActiveSeconds(0);
+        setLaunchNotification({
+          name: game.name,
+          cover: game.cover,
+          playTime: formatPlayTime(game.playTime) || "Primeira vez",
+        });
         showToast(`🎮 ${game.name} iniciado no PC!`, "success");
         loadGames(false);
+        checkActiveGame();
       }
     } catch (err) {
       console.error("Erro iniciando jogo:", err);
@@ -292,14 +320,26 @@ export default function App() {
   // Encerrar jogo atual (soft Alt+F4 vs hard Taskkill)
   async function closeActiveGame(force = true, targetParams = {}) {
     triggerHaptic(50);
-    showToast(force ? "Encerrando processo com Taskkill..." : "Enviando Alt+F4 suave ao jogo...", "info");
+    showToast(force ? "Forçando encerramento do processo..." : "Encerrando jogo...", "info");
     try {
       const res = await axios.post(`${API}/system/close-game`, { force, ...targetParams });
       showToast(
-        res.data?.message || (force ? "Jogo encerrado via Taskkill" : "Alt+F4 enviado ao PC"),
+        res.data?.message || (force ? "Processo encerrado" : "Jogo encerrado"),
         "success"
       );
-      setActiveGame(null);
+      if (Array.isArray(res.data?.activeGames)) {
+        setActiveGames(res.data.activeGames);
+        setActiveGame(res.data.activeGames[0] || null);
+      } else if (targetParams.id) {
+        setActiveGames((prev) => {
+          const rem = prev.filter((g) => g.id !== targetParams.id);
+          setActiveGame(rem[0] || null);
+          return rem;
+        });
+      } else {
+        setActiveGame(null);
+        setActiveGames([]);
+      }
       setActiveSeconds(0);
       loadGames(false);
     } catch (err) {
@@ -309,15 +349,24 @@ export default function App() {
   }
 
   // Dispensar barra de jogo ativo salvando a sessão
-  async function dismissActiveGame() {
+  async function dismissActiveGame(gameId = null) {
     triggerHaptic(20);
     try {
-      await axios.post(`${API}/system/clear-active`);
+      await axios.post(`${API}/system/clear-active`, gameId ? { id: gameId } : {});
     } catch {
       // ignore
     }
-    setActiveGame(null);
-    setActiveSeconds(0);
+    if (gameId) {
+      setActiveGames((prev) => {
+        const remaining = prev.filter((g) => g.id !== gameId);
+        setActiveGame(remaining[0] || null);
+        return remaining;
+      });
+    } else {
+      setActiveGame(null);
+      setActiveGames([]);
+      setActiveSeconds(0);
+    }
     loadGames(false);
   }
 
@@ -710,6 +759,15 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Notificação de jogo iniciado: auto-fechar em 5 segundos
+  useEffect(() => {
+    if (!launchNotification) return;
+    const timer = setTimeout(() => {
+      setLaunchNotification(null);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [launchNotification]);
+
   // Atualiza status do PC quando o Controle Remoto está aberto
   useEffect(() => {
     if (!remoteOpen) return;
@@ -805,8 +863,10 @@ export default function App() {
     if (!menuOpen) return { played: [], unplayed: [], totalLabel: "0m" };
 
     const items = games.map((g) => {
-      const isActive = Boolean(activeGame && activeGame.id === g.id);
-      const total = (Number(g.playTime) || 0) + (isActive ? activeSeconds : 0);
+      const matchedAg = activeGames.find((ag) => ag.id === g.id) || (activeGame?.id === g.id ? activeGame : null);
+      const isActive = Boolean(matchedAg);
+      const currentSec = matchedAg ? getGameActiveSeconds(matchedAg) : 0;
+      const total = (Number(g.playTime) || 0) + currentSec;
       return { id: g.id, name: g.name, cover: g.cover, total, isActive };
     });
 
@@ -827,7 +887,7 @@ export default function App() {
       unplayed,
       totalLabel: formatPlayTimeDetailed(totalSec),
     };
-  }, [games, menuOpen, activeGame, activeSeconds]);
+  }, [games, menuOpen, activeGame, activeGames]);
 
   // Jogo em Destaque (Hero Banner): Jogo ativo, ou mais recente, ou favorito, ou o primeiro
   const heroGame = useMemo(() => {
@@ -894,6 +954,48 @@ export default function App() {
         </div>
       )}
 
+      {/* Notificação Rica de Jogo Iniciado */}
+      {launchNotification && (
+        <div
+          className="launch-notification-toast"
+          onClick={() => setLaunchNotification(null)}
+          role="status"
+          aria-live="polite"
+        >
+          <div className="launch-toast-body">
+            {launchNotification.cover ? (
+              <img
+                src={`${API}/covers/${launchNotification.cover}`}
+                alt={launchNotification.name}
+                className="launch-toast-thumb"
+              />
+            ) : (
+              <div className="launch-toast-thumb placeholder">🎮</div>
+            )}
+            <div className="launch-toast-info">
+              <div className="launch-toast-badge-row">
+                <span className="launch-toast-badge">🚀 INICIADO</span>
+              </div>
+              <strong className="launch-toast-title">{launchNotification.name}</strong>
+              <span className="launch-toast-playtime">
+                Tempo jogado: <strong>{launchNotification.playTime}</strong>
+              </span>
+            </div>
+            <button
+              className="launch-toast-close"
+              onClick={(e) => {
+                e.stopPropagation();
+                setLaunchNotification(null);
+              }}
+              title="Fechar notificação"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="launch-toast-timer-bar" />
+        </div>
+      )}
+
       {/* Header Fixo / Estilo Console */}
       <header className="navbar">
         <div className="navbar-container">
@@ -946,66 +1048,94 @@ export default function App() {
               onClick={refreshGames}
               disabled={refreshing}
               aria-label="Atualizar Biblioteca"
+              title="Atualizar biblioteca e detectar jogos em execução"
             >
-              🔄 <span className="btn-label">Atualizar</span>
+              🔄
             </button>
           </div>
         </div>
       </header>
 
-      {/* Banner Sticky: Jogando Agora */}
-      {activeGame && (
+      {/* Banner Sticky: Jogando Agora (com suporte a múltiplos jogos) */}
+      {(activeGame || activeGames.length > 0) && (
         <div className="active-game-banner">
-          <div className="banner-content">
-            <div className="banner-game-info">
-              {activeGame.cover ? (
-                <img
-                  src={`${API}/covers/${activeGame.cover}`}
-                  alt={activeGame.name}
-                  className="banner-thumb"
-                />
-              ) : (
-                <div className="banner-thumb-placeholder">🎮</div>
-              )}
-              <div className="banner-titles">
-                <span className="banner-tag">JOGANDO AGORA</span>
-                <strong className="banner-name">{activeGame.name}</strong>
-                <div className="banner-meta">
-                  <span className="banner-timer">⏱️ {formatTimer(activeSeconds)}</span>
-                  {activeGame.pid && (
-                    <span className="banner-pid" title="Process ID">
-                      PID: {activeGame.pid}
-                    </span>
-                  )}
-                  {activeGame.exeName && <span className="banner-exe">{activeGame.exeName}</span>}
-                </div>
+          {activeGames.length > 1 && (
+            <div className="banner-multi-alert">
+              <span className="banner-multi-badge">
+                ⚠️ {activeGames.length} JOGOS EM EXECUÇÃO SIMULTÂNEA
+              </span>
+              <div className="banner-multi-tabs">
+                {activeGames.map((ag) => (
+                  <button
+                    key={ag.id}
+                    className={`banner-tab-btn ${activeGame?.id === ag.id ? "active" : ""}`}
+                    onClick={() => setActiveGame(ag)}
+                    title={`Ver controles de ${ag.name}`}
+                  >
+                    🎮 {ag.name}
+                  </button>
+                ))}
               </div>
             </div>
+          )}
 
-            <div className="banner-buttons">
-              <button
-                className="btn btn-close-taskkill"
-                onClick={() => closeActiveGame(true)}
-                title="Encerra o processo do jogo imediatamente via Taskkill"
-              >
-                🛑 Encerrar (Taskkill)
-              </button>
-              <button
-                className="btn btn-close-soft"
-                onClick={() => closeActiveGame(false)}
-                title="Envia apenas Alt+F4 suave para o jogo fechar salvando progresso"
-              >
-                ✕ Alt+F4
-              </button>
-              <button
-                className="btn btn-dismiss"
-                onClick={dismissActiveGame}
-                title="Ocultar aviso se já fechou o jogo no PC"
-              >
-                Ocultar
-              </button>
+          {activeGame && (
+            <div className="banner-content">
+              <div className="banner-game-info">
+                {activeGame.cover ? (
+                  <img
+                    src={`${API}/covers/${activeGame.cover}`}
+                    alt={activeGame.name}
+                    className="banner-thumb"
+                  />
+                ) : (
+                  <div className="banner-thumb-placeholder">🎮</div>
+                )}
+                <div className="banner-titles">
+                  <span className="banner-tag">
+                    {activeGames.length > 1
+                      ? `JOGANDO AGORA (${activeGames.length} EM EXECUÇÃO)`
+                      : "JOGANDO AGORA"}
+                  </span>
+                  <strong className="banner-name">{activeGame.name}</strong>
+                  <div className="banner-meta">
+                    <span className="banner-timer">
+                      ⏱️ {formatTimer(getGameActiveSeconds(activeGame) || activeSeconds)}
+                    </span>
+                    {activeGame.pid && (
+                      <span className="banner-pid" title="Process ID">
+                        PID: {activeGame.pid}
+                      </span>
+                    )}
+                    {activeGame.exeName && <span className="banner-exe">{activeGame.exeName}</span>}
+                  </div>
+                </div>
+              </div>
+
+              <div className="banner-buttons">
+                <button
+                  className="btn btn-close-taskkill"
+                  onClick={() =>
+                    setForceCloseModal({
+                      id: activeGame.id,
+                      exeName: activeGame.exeName,
+                      name: activeGame.name,
+                    })
+                  }
+                  title="Forçar encerramento imediato via taskkill"
+                >
+                  🛑 Forçar encerramento
+                </button>
+                <button
+                  className="btn btn-dismiss"
+                  onClick={() => dismissActiveGame(activeGame.id)}
+                  title="Ocultar aviso se já fechou o jogo no PC"
+                >
+                  Ocultar
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -1102,11 +1232,17 @@ export default function App() {
 
                   {heroGame.isPlayingNow && (
                     <button
-                      className="btn btn-close-soft"
-                      onClick={() => closeActiveGame(false)}
-                      title="Fechar suavemente (Alt+F4)"
+                      className="btn btn-close-taskkill"
+                      onClick={() =>
+                        setForceCloseModal({
+                          id: heroGame.id,
+                          exeName: heroGame.resolvedExe,
+                          name: heroGame.name,
+                        })
+                      }
+                      title="Forçar encerramento imediato via taskkill"
                     >
-                      ✕ Alt+F4
+                      🛑 Forçar encerramento
                     </button>
                   )}
                 </div>
@@ -1356,7 +1492,7 @@ export default function App() {
               <div className="grid poster-grid">
                 {filteredGames.map((game) => {
                   const isLaunching = launchingId === game.id;
-                  const isCurrent = activeGame && activeGame.id === game.id;
+                  const isCurrent = activeGames.some((ag) => ag.id === game.id) || Boolean(activeGame && activeGame.id === game.id);
                   const playTimeLabel = formatPlayTime(game.playTime);
 
                   return (
@@ -1456,9 +1592,9 @@ export default function App() {
                                 className="btn btn-card-kill-compact"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  closeActiveGame(true, { id: game.id, exeName: game.resolvedExe });
+                                  setForceCloseModal({ id: game.id, exeName: game.resolvedExe, name: game.name });
                                 }}
-                                title="Encerrar processo do jogo imediatamente"
+                                title="Forçar encerramento do jogo"
                               >
                                 🛑
                               </button>
@@ -1475,7 +1611,7 @@ export default function App() {
               <div className="list-view-container">
                 {filteredGames.map((game) => {
                   const isLaunching = launchingId === game.id;
-                  const isCurrent = activeGame && activeGame.id === game.id;
+                  const isCurrent = activeGames.some((ag) => ag.id === game.id) || Boolean(activeGame && activeGame.id === game.id);
                   const playTimeLabel = formatPlayTime(game.playTime);
 
                   return (
@@ -1735,9 +1871,9 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Seção Encerrar Jogo */}
+                {/* Seção Fechar Janela */}
                 <div className="remote-section">
-                  <span className="section-title">🛑 Fechar Jogo / Janela</span>
+                  <span className="section-title">🛑 Fechar Janela</span>
                   <div className="remote-kill-row">
                     <button
                       className="remote-btn btn-warning-action"
@@ -1746,16 +1882,7 @@ export default function App() {
                         closeActiveGame(false);
                       }}
                     >
-                      ✕ Fechar Suave (Alt+F4)
-                    </button>
-                    <button
-                      className="remote-btn btn-danger-action"
-                      onClick={() => {
-                        setRemoteOpen(false);
-                        closeActiveGame(true);
-                      }}
-                    >
-                      🛑 Forçar Taskkill
+                      ✕ Fechar Janela (ALT + F4)
                     </button>
                   </div>
                 </div>
@@ -2007,6 +2134,37 @@ export default function App() {
         </div>
       )}
 
+      {/* Modal de Confirmação de Forçar Encerramento (Taskkill) */}
+      {forceCloseModal && (
+        <div className="modal-backdrop" onClick={() => setForceCloseModal(null)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>🛑 Forçar encerramento?</h3>
+            <p>
+              Deseja prosseguir? O processo forçará o encerramento {forceCloseModal?.name ? `de "${forceCloseModal.name}"` : "do jogo"} via comando taskkill e isso pode acarretar na perda de dados salvos.
+            </p>
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setForceCloseModal(null)}>
+                Cancelar
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => {
+                  const targetParams =
+                    typeof forceCloseModal === "object" && forceCloseModal !== null
+                      ? forceCloseModal
+                      : {};
+                  setForceCloseModal(null);
+                  if (remoteOpen) setRemoteOpen(false);
+                  closeActiveGame(true, targetParams);
+                }}
+              >
+                Forçar encerramento
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Menu Lateral (Drawer) - Organiza as opções do sistema */}
       {menuOpen && (
         <div className="side-menu-overlay" onClick={() => setMenuOpen(false)}>
@@ -2246,17 +2404,46 @@ export default function App() {
                   <span className="side-menu-icon">🖱️</span>
                   <span className="side-menu-label">Touchpad & Teclado</span>
                 </button>
-                {activeGame && (
+                {activeGames.length > 0 ? (
+                  activeGames.map((ag) => (
+                    <button
+                      key={ag.id}
+                      className="side-menu-item danger"
+                      onClick={() =>
+                        menuRun(() =>
+                          setForceCloseModal({
+                            id: ag.id,
+                            exeName: ag.exeName,
+                            name: ag.name,
+                          })
+                        )
+                      }
+                      title={`Forçar encerramento de ${ag.name}`}
+                    >
+                      <span className="side-menu-icon">🛑</span>
+                      <span className="side-menu-label">Forçar encerramento ({ag.name})</span>
+                      <span className="dock-pulse-dot static" />
+                    </button>
+                  ))
+                ) : activeGame ? (
                   <button
-                    className="side-menu-item warning"
-                    onClick={() => menuRun(() => closeActiveGame(false))}
-                    title="Envia Alt+F4 suave para o jogo em execução"
+                    className="side-menu-item danger"
+                    onClick={() =>
+                      menuRun(() =>
+                        setForceCloseModal({
+                          id: activeGame.id,
+                          exeName: activeGame.exeName,
+                          name: activeGame.name,
+                        })
+                      )
+                    }
+                    title="Forçar encerramento do jogo"
                   >
-                    <span className="side-menu-icon">✕</span>
-                    <span className="side-menu-label">Fechar jogo atual (Alt+F4)</span>
+                    <span className="side-menu-icon">🛑</span>
+                    <span className="side-menu-label">Forçar encerramento</span>
                     <span className="dock-pulse-dot static" />
                   </button>
-                )}
+                ) : null}
               </div>
 
               {/* Sistema */}
@@ -2354,7 +2541,12 @@ export default function App() {
         >
           <span className="dock-icon">🎛️</span>
           <span className="dock-label">Controle PC</span>
-          {activeGame && <span className="dock-pulse-dot" title="Jogo em execução" />}
+          {(activeGame || activeGames.length > 0) && (
+            <span
+              className="dock-pulse-dot"
+              title={activeGames.length > 1 ? `${activeGames.length} jogos em execução` : "Jogo em execução"}
+            />
+          )}
         </button>
       </nav>
     </div>
