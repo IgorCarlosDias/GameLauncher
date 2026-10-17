@@ -4,9 +4,10 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
+const rateLimit = require("express-rate-limit");
 const fs = require("fs");
 const os = require("os");
-const { exec } = require("child_process");
+const { exec, execFile } = require("child_process");
 const axios = require("axios");
 
 const { getGameCover, searchGameCovers } = require("./services/steamgriddb");
@@ -38,6 +39,24 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Rate limiters para proteção contra abuso e conformidade com CodeQL
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 1200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === "/system/mouse",
+});
+
+const systemActionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(apiLimiter);
+
 // Logger de requisições (ignora spam de mousemove e polling frequente no console)
 app.use((req, res, next) => {
   if (req.url !== "/system/mouse" && req.url !== "/system/active-game" && req.url !== "/system/stats") {
@@ -62,38 +81,103 @@ if (!fs.existsSync(COVER_FOLDER)) {
   fs.mkdirSync(COVER_FOLDER, { recursive: true });
 }
 
-function runSysControl(action, param = "") {
+const ALLOWED_SYSCONTROL_ACTIONS = new Set([
+  "volup",
+  "voldown",
+  "volmute",
+  "getvol",
+  "setvol",
+  "getaudiodevices",
+  "setaudiodevice",
+  "playpause",
+  "next",
+  "prev",
+  "alttab",
+  "altf4",
+  "escape",
+  "enter",
+  "backspace",
+  "space",
+  "tab",
+  "up",
+  "down",
+  "left",
+  "right",
+  "win",
+  "wind",
+  "mousemove",
+  "mouseclick",
+  "mousescroll",
+  "typetext",
+  "sleep",
+  "killpid",
+  "killname",
+  "killforeground",
+  "launch",
+  "launchb64",
+  "cursorpos",
+  "deskinfo",
+]);
+
+function runSysControl(action, ...params) {
   return new Promise((resolve) => {
-    exec(`"${SYSCONTROL_BIN}" ${action} ${param}`, { encoding: "utf8" }, (err, stdout, stderr) => {
-      resolve((stdout || stderr || "").trim());
-    });
+    const safeAction = String(action || "").toLowerCase();
+    if (!ALLOWED_SYSCONTROL_ACTIONS.has(safeAction)) {
+      return resolve("");
+    }
+    const args = [
+      safeAction,
+      ...params
+        .filter((p) => p !== undefined && p !== null && p !== "")
+        .map((p) => String(p)),
+    ];
+    execFile(
+      SYSCONTROL_BIN,
+      args,
+      { encoding: "utf8", windowsHide: true },
+      (err, stdout, stderr) => {
+        resolve((stdout || stderr || "").trim());
+      }
+    );
   });
 }
 
 function findProcessPid(exeName) {
   return new Promise((resolve) => {
     if (!exeName) return resolve(null);
-    exec(`tasklist /FI "IMAGENAME eq ${exeName}" /FO CSV /NH`, (err, stdout) => {
-      if (err || !stdout) return resolve(null);
-      const lines = stdout
-        .trim()
-        .split("\n")
-        .filter((l) => l.toLowerCase().includes(exeName.toLowerCase()));
-      if (lines.length === 0) return resolve(null);
-      const parts = lines[0].split(",").map((p) => p.replace(/"/g, "").trim());
-      const pid = parseInt(parts[1], 10);
-      resolve(pid || null);
-    });
+    const safeExe = path.basename(String(exeName));
+    execFile(
+      "tasklist.exe",
+      ["/FI", `IMAGENAME eq ${safeExe}`, "/FO", "CSV", "/NH"],
+      { encoding: "utf8", windowsHide: true },
+      (err, stdout) => {
+        if (err || !stdout) return resolve(null);
+        const lines = stdout
+          .trim()
+          .split("\n")
+          .filter((l) => l.toLowerCase().includes(safeExe.toLowerCase()));
+        if (lines.length === 0) return resolve(null);
+        const parts = lines[0].split(",").map((p) => p.replace(/"/g, "").trim());
+        const pid = parseInt(parts[1], 10);
+        resolve(pid || null);
+      }
+    );
   });
 }
 
 function isPidRunning(pid) {
   return new Promise((resolve) => {
-    if (!pid) return resolve(false);
-    exec(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, (err, stdout) => {
-      if (err || !stdout) return resolve(false);
-      resolve(stdout.includes(`"${pid}"`));
-    });
+    const numericPid = Number(pid);
+    if (!Number.isInteger(numericPid) || numericPid <= 0) return resolve(false);
+    execFile(
+      "tasklist.exe",
+      ["/FI", `PID eq ${numericPid}`, "/FO", "CSV", "/NH"],
+      { encoding: "utf8", windowsHide: true },
+      (err, stdout) => {
+        if (err || !stdout) return resolve(false);
+        resolve(stdout.includes(`"${numericPid}"`));
+      }
+    );
   });
 }
 
@@ -168,6 +252,44 @@ function sanitizeCoverName(name) {
   );
 }
 
+const ALLOWED_COVER_HOSTS = [
+  "cdn2.steamgriddb.com",
+  "cdn.steamgriddb.com",
+  "www.steamgriddb.com",
+  "cdn.cloudflare.steamstatic.com",
+  "shared.akamai.steamstatic.com",
+  "shared.fastly.steamstatic.com",
+  "steamcdn-a.akamaihd.net",
+  "avatars.steamstatic.com",
+  "images.igdb.com",
+  "i.imgur.com",
+  "media.rawg.io",
+  "upload.wikimedia.org",
+  "raw.githubusercontent.com",
+];
+
+function buildSafeCoverUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return null;
+  let parsed;
+  try {
+    parsed = new URL(rawUrl.trim());
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:") {
+    return null;
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  const safeHost = ALLOWED_COVER_HOSTS.find((h) => h === hostname);
+  if (!safeHost) {
+    return null;
+  }
+  if (!parsed.pathname || !parsed.pathname.startsWith("/") || parsed.pathname.startsWith("//")) {
+    return null;
+  }
+  return `https://${safeHost}${parsed.pathname}${parsed.search}`;
+}
+
 async function downloadCover(gameName, customImageUrl = null, forceOverwrite = false) {
   const baseSlug = sanitizeCoverName(gameName);
   const fileName = forceOverwrite ? `${baseSlug}-${Date.now()}.jpg` : `${baseSlug}.jpg`;
@@ -177,15 +299,17 @@ async function downloadCover(gameName, customImageUrl = null, forceOverwrite = f
     return fileName;
   }
 
-  const imageUrl = customImageUrl || (await getGameCover(gameName));
-  if (!imageUrl) {
+  const rawUrl = customImageUrl || (await getGameCover(gameName));
+  const safeImageUrl = buildSafeCoverUrl(rawUrl);
+  if (!safeImageUrl) {
     return null;
   }
 
   try {
-    const response = await axios.get(imageUrl, {
+    const response = await axios.get(safeImageUrl, {
       responseType: "arraybuffer",
       timeout: 10000,
+      maxRedirects: 3,
     });
 
     fs.writeFileSync(filePath, response.data);
@@ -955,7 +1079,7 @@ app.put("/games/:id", async (req, res) => {
 // ABRIR JOGO
 // =========================
 
-app.post("/play", async (req, res) => {
+app.post("/play", systemActionLimiter, async (req, res) => {
   const { id } = req.body;
   const game = games.find((g) => g.id === id);
 
@@ -1164,7 +1288,7 @@ app.get("/system/active-game", async (req, res) => {
 setInterval(syncActiveGameState, ACTIVE_GAME_MONITOR_INTERVAL_MS);
 
 // Fechar jogo: separa fechamento suave (Alt+F4) de fechamento forçado (Taskkill)
-app.post("/system/close-game", async (req, res) => {
+app.post("/system/close-game", systemActionLimiter, async (req, res) => {
   const { force = true, id, exeName: customExe } = req.body || {};
   const current = (id && activeGames.get(id)) || activeGame;
 
@@ -1210,20 +1334,32 @@ app.post("/system/close-game", async (req, res) => {
     if (g && g.resolvedExe) imTargets.add(g.resolvedExe);
   }
 
-  if (customExe) {
-    imTargets.add(customExe);
+  // Valida customExe contra os executáveis conhecidos na biblioteca para impedir injeção
+  if (customExe && typeof customExe === "string") {
+    const normalizedExe = customExe.trim().toLowerCase();
+    const matchedGame = games.find(
+      (item) => item.resolvedExe && item.resolvedExe.toLowerCase() === normalizedExe
+    );
+    if (matchedGame && matchedGame.resolvedExe) {
+      imTargets.add(matchedGame.resolvedExe);
+    }
   }
 
   console.log(`[Taskkill] PIDs:`, Array.from(pidTargets), `Executáveis:`, Array.from(imTargets));
 
   for (const pid of pidTargets) {
-    await runSysControl("killpid", pid);
-    exec(`taskkill /F /PID ${pid} /T`);
+    const numericPid = Number(pid);
+    if (Number.isInteger(numericPid) && numericPid > 0) {
+      await runSysControl("killpid", String(numericPid));
+      execFile("taskkill.exe", ["/F", "/PID", String(numericPid), "/T"], { windowsHide: true }, () => {});
+    }
   }
 
   for (const im of imTargets) {
-    await runSysControl("killname", `"${im}"`);
-    exec(`taskkill /F /IM "${im}" /T`);
+    if (typeof im === "string" && /^[^"\\/:*?<>|\r\n]+\.exe$/i.test(im)) {
+      await runSysControl("killname", im);
+      execFile("taskkill.exe", ["/F", "/IM", im, "/T"], { windowsHide: true }, () => {});
+    }
   }
 
   // Só mata a janela em primeiro plano se não havia alvo específico identificado
@@ -1305,11 +1441,23 @@ app.get("/system/audio", async (req, res) => {
 // Trocar dispositivo de saída de áudio padrão do Windows (ex.: TV HDMI <-> Headset)
 app.post("/system/audio/device", async (req, res) => {
   const { deviceId } = req.body || {};
-  if (!deviceId) {
+  if (!deviceId || typeof deviceId !== "string") {
     return res.status(400).json({ success: false, message: "deviceId obrigatório" });
   }
   try {
-    await runSysControl("setaudiodevice", `"${deviceId}"`);
+    const currentRaw = await runSysControl("getaudiodevices");
+    let currentDevices = [];
+    try {
+      currentDevices = JSON.parse(currentRaw);
+    } catch {}
+    const matched = Array.isArray(currentDevices)
+      ? currentDevices.find((d) => d && d.id === deviceId)
+      : null;
+    if (!matched) {
+      return res.status(400).json({ success: false, message: "Dispositivo de áudio inválido" });
+    }
+
+    await runSysControl("setaudiodevice", matched.id);
     const devRaw = await runSysControl("getaudiodevices");
     let devices = [];
     try {
@@ -1401,7 +1549,7 @@ async function flushMouseMove() {
     pendingMouseDx = 0;
     pendingMouseDy = 0;
     if (dx !== 0 || dy !== 0) {
-      await runSysControl("mousemove", `${dx} ${dy}`);
+      await runSysControl("mousemove", String(dx), String(dy));
     }
   }
   flushingMouse = false;
@@ -1416,9 +1564,10 @@ app.post("/system/mouse", async (req, res) => {
       flushMouseMove();
       return res.json({ success: true });
     } else if (action === "click") {
-      await runSysControl("mouseclick", button);
+      const safeButton = button === "right" ? "right" : button === "double" ? "double" : "left";
+      await runSysControl("mouseclick", safeButton);
     } else if (action === "scroll") {
-      await runSysControl("mousescroll", String(Math.round(delta)));
+      await runSysControl("mousescroll", String(Math.round(Number(delta) || 0)));
     } else {
       return res.status(400).json({ success: false, message: "Ação de mouse inválida" });
     }
@@ -1477,17 +1626,17 @@ app.post("/system/keyboard", async (req, res) => {
 });
 
 // Controle de Energia (Suspender, Desligar, Reiniciar, Cancelar)
-app.post("/system/power", async (req, res) => {
+app.post("/system/power", systemActionLimiter, async (req, res) => {
   const { action } = req.body || {};
   try {
     if (action === "sleep") {
       runSysControl("sleep");
     } else if (action === "shutdown") {
-      exec('shutdown /s /t 30 /c "GameLauncher: Desligando PC em 30s"');
+      execFile("shutdown.exe", ["/s", "/t", "30", "/c", "GameLauncher: Desligando PC em 30s"], { windowsHide: true }, () => {});
     } else if (action === "restart") {
-      exec('shutdown /r /t 30 /c "GameLauncher: Reiniciando PC em 30s"');
+      execFile("shutdown.exe", ["/r", "/t", "30", "/c", "GameLauncher: Reiniciando PC em 30s"], { windowsHide: true }, () => {});
     } else if (action === "cancel") {
-      exec("shutdown /a");
+      execFile("shutdown.exe", ["/a"], { windowsHide: true }, () => {});
     } else {
       return res.status(400).json({ success: false, message: "Ação de energia inválida" });
     }
