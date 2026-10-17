@@ -1,0 +1,43 @@
+name: "✨ Feature Request"
+description: "Sugira uma nova funcionalidade, melhoria visual ou integração"
+title: "[FEATURE]: "
+labels: ["type: feature", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por ajudar a evoluir o GameLauncher! Sugira novas ideias abaixo.
+  - type: dropdown
+    id: category
+    attributes:
+      label: "Área da Funcionalidade"
+      description: "Qual parte do projeto esta funcionalidade afeta?"
+      options:
+        - "Interface / UI / UX (Frontend)"
+        - "Backend / APIs / Detecção de Jogos"
+        - "Integrações (Steam, Epic, GOG, etc)"
+        - "DevOps / CI/CD / Packaging"
+        - "Outro"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: "Qual problema essa funcionalidade resolve?"
+      description: "Uma explicação clara e concisa de qual é a necessidade ou limitação atual."
+      placeholder: "Atualmente não é possível..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: "Solução Proposta"
+      description: "Como você imagina que essa funcionalidade deve funcionar?"
+      placeholder: "Gostaria que houvesse uma opção para..."
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "Alternativas Consideradas"
+      description: "Outras soluções ou ferramentas que você considerou ou observou em outros launchers."

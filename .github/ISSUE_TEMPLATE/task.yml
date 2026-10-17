@@ -1,0 +1,23 @@
+name: "📋 Tarefa Técnica / Roadmap"
+description: "Crie uma tarefa de desenvolvimento, refatoração ou infraestrutura"
+title: "[TASK]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: "Resumo da Tarefa"
+      description: "Objetivo técnico e escopo do trabalho."
+    validations:
+      required: true
+  - type: textarea
+    id: checklist
+    attributes:
+      label: "Critérios de Aceite / Checklist"
+      value: |
+        - [ ] Implementar a alteração necessária
+        - [ ] Executar oxlint e build sem erros
+        - [ ] Testar localmente no Windows
+        - [ ] Atualizar documentação se aplicável
+    validations:
+      required: true

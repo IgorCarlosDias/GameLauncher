@@ -1,0 +1,63 @@
+name: "🐛 Bug Report"
+description: "Crie um relatório de bug detalhado para ajudar a corrigir o problema"
+title: "[BUG]: "
+labels: ["type: bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por relatar um bug! Por favor, preencha o formulário abaixo para investigarmos.
+  - type: input
+    id: version
+    attributes:
+      label: "Versão do GameLauncher"
+      description: "Qual versão ou commit do GameLauncher você está utilizando? (ex: v0.0.1 ou branch main)"
+      placeholder: "v0.0.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: "Sistema Operacional"
+      description: "Em qual sistema o erro ocorreu?"
+      options:
+        - "Windows 11"
+        - "Windows 10"
+        - "Linux"
+        - "macOS"
+        - "Outro"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: "Descrição do Problema"
+      description: "Explicação clara e concisa do que aconteceu."
+      placeholder: "Ao clicar no botão de sincronizar jogos..."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: "Passos para Reproduzir"
+      description: "Como reproduzir este comportamento?"
+      value: |
+        1. Iniciar o GameLauncher
+        2. Navegar para '...'
+        3. Clicar em '...'
+        4. Ver o erro
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: "Comportamento Esperado"
+      description: "O que você esperava que acontecesse?"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Logs ou Mensagens de Erro"
+      description: "Cole aqui saídas do terminal, logs de backend ou console do DevTools (F12)."
+      render: shell

@@ -1,0 +1,63 @@
+name: "🚀 Automated Release & Packaging"
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    name: Package and Publish Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 📦 Install Frontend Dependencies & Build
+        working-directory: frontend
+        run: |
+          npm ci || npm install
+          npm run build
+
+      - name: 📦 Prepare Release Archive
+        run: |
+          mkdir -p release-pkg
+          cp -r backend release-pkg/
+          mkdir -p release-pkg/frontend
+          cp -r frontend/dist release-pkg/frontend/
+          cp package*.json release-pkg/
+          cp *.bat release-pkg/ 2>/dev/null || true
+          cp *.vbs release-pkg/ 2>/dev/null || true
+          cp .env.example release-pkg/
+          cp README.md release-pkg/
+          cd release-pkg && zip -r ../GameLauncher-portable.zip .
+
+      - name: 🏷️ Determine Tag / Release Name
+        id: release_meta
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "TAG_NAME=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 📢 Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.TAG_NAME }}
+          name: "GameLauncher ${{ steps.release_meta.outputs.TAG_NAME }}"
+          files: GameLauncher-portable.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
