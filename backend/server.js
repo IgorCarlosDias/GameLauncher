@@ -977,6 +977,7 @@ app.post("/play", async (req, res) => {
 
     let targetPath = game.file;
     let workingDir = path.dirname(game.file);
+    let launchArgs = "";
 
     if (game.extension === ".lnk") {
       const shortcut = await resolveShortcut(game.file);
@@ -984,24 +985,33 @@ app.post("/play", async (req, res) => {
         if (!exeName) exeName = path.basename(shortcut.target);
         if (fs.existsSync(shortcut.target)) {
           targetPath = shortcut.target;
-          workingDir = (shortcut.workingDir && fs.existsSync(shortcut.workingDir))
-            ? shortcut.workingDir
-            : path.dirname(shortcut.target);
+          workingDir =
+            shortcut.workingDir && fs.existsSync(shortcut.workingDir)
+              ? shortcut.workingDir
+              : path.dirname(shortcut.target);
+          launchArgs = shortcut.args || "";
         }
       } else if (!exeName) {
         exeName = path.basename(game.file, ".lnk") + ".exe";
       }
     } else if (game.extension === ".url") {
       if (!exeName) exeName = path.basename(game.file, ".url") + ".exe";
+      if (steamId) {
+        targetPath = `steam://rungameid/${steamId}`;
+        workingDir = "";
+      }
     } else {
       if (!exeName) exeName = path.basename(game.file);
     }
 
-    // Inicia o jogo
-    if (game.extension === ".url" && steamId) {
-      exec(`cmd /c start "" "steam://rungameid/${steamId}"`);
-    } else {
-      exec(`cmd /c start "" "${targetPath}"`, { cwd: workingDir });
+    // Inicia o jogo na área de trabalho interativa visível (Shell.Application / WinSta0\Default)
+    const launchPayload = Buffer.from(
+      `${targetPath}|${workingDir}|${launchArgs}`,
+      "utf8"
+    ).toString("base64");
+    const launchOut = await runSysControl("launchb64", launchPayload);
+    if (launchOut) {
+      console.log(`[Launch] ${game.name}: ${launchOut}`);
     }
 
     const nowIso = new Date().toISOString();

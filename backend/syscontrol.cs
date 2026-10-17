@@ -366,16 +366,74 @@ namespace SysControl {
             } catch { }
         }
 
-        static void Launch(string filePath) {
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct STARTUPINFOW {
+            public int cb;
+            public string lpReserved;
+            public string lpDesktop;
+            public string lpTitle;
+            public int dwX;
+            public int dwY;
+            public int dwXSize;
+            public int dwYSize;
+            public int dwXCountChars;
+            public int dwYCountChars;
+            public int dwFillAttribute;
+            public int dwFlags;
+            public short wShowWindow;
+            public short cbReserved2;
+            public IntPtr lpReserved2;
+            public IntPtr hStdInput;
+            public IntPtr hStdOutput;
+            public IntPtr hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct PROCESS_INFORMATION {
+            public IntPtr hProcess;
+            public IntPtr hThread;
+            public int dwProcessId;
+            public int dwThreadId;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool CreateProcessW(
+            string lpApplicationName,
+            string lpCommandLine,
+            IntPtr lpProcessAttributes,
+            IntPtr lpThreadAttributes,
+            bool bInheritHandles,
+            uint dwCreationFlags,
+            IntPtr lpEnvironment,
+            string lpCurrentDirectory,
+            ref STARTUPINFOW lpStartupInfo,
+            out PROCESS_INFORMATION lpProcessInformation
+        );
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool CloseHandle(IntPtr hObject);
+
+        static void Launch(string filePath, string workingDir = "", string arguments = "") {
             if (string.IsNullOrEmpty(filePath)) return;
+
+            bool isUri = filePath.Contains("://");
+            string dir = workingDir ?? "";
+            if (string.IsNullOrEmpty(dir) && !isUri) {
+                try {
+                    dir = Path.GetDirectoryName(filePath) ?? "";
+                } catch {
+                    dir = "";
+                }
+            }
+
+            // 1. Primary: Shell.Application (delegates to explorer.exe on the interactive user desktop WinSta0\Default)
             try {
                 Type shellType = Type.GetTypeFromProgID("Shell.Application");
                 if (shellType != null) {
                     object shell = Activator.CreateInstance(shellType);
-                    string dir = Path.GetDirectoryName(filePath);
                     shellType.InvokeMember("ShellExecute",
                         System.Reflection.BindingFlags.InvokeMethod,
-                        null, shell, new object[] { filePath, "", dir ?? "", "open", 1 });
+                        null, shell, new object[] { filePath, arguments ?? "", dir, "open", 1 });
                     Console.WriteLine("Launched via Shell.Application");
                     return;
                 }
@@ -383,12 +441,36 @@ namespace SysControl {
                 Console.WriteLine("Shell.Application error: " + ex.Message);
             }
 
+            // 2. Fallback: Win32 CreateProcessW explicitly targeting WinSta0\Default with SW_SHOWNORMAL
+            try {
+                STARTUPINFOW si = new STARTUPINFOW();
+                si.cb = Marshal.SizeOf(typeof(STARTUPINFOW));
+                si.lpDesktop = "winsta0\\default";
+                si.dwFlags = 0x00000001; // STARTF_USESHOWWINDOW
+                si.wShowWindow = 1;     // SW_SHOWNORMAL
+
+                PROCESS_INFORMATION pi;
+                string cmdLine = "cmd.exe /c start \"\" \"" + filePath + "\"" +
+                    (string.IsNullOrEmpty(arguments) ? "" : (" " + arguments));
+                string cwd = (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) ? dir : null;
+
+                if (CreateProcessW(null, cmdLine, IntPtr.Zero, IntPtr.Zero, false, 0x00000010, IntPtr.Zero, cwd, ref si, out pi)) {
+                    if (pi.hProcess != IntPtr.Zero) CloseHandle(pi.hProcess);
+                    if (pi.hThread != IntPtr.Zero) CloseHandle(pi.hThread);
+                    Console.WriteLine("Launched via CreateProcessW(winsta0\\default)");
+                    return;
+                }
+            } catch (Exception ex) {
+                Console.WriteLine("CreateProcessW error: " + ex.Message);
+            }
+
+            // 3. Final fallback: Process.Start
             try {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = filePath;
+                if (!string.IsNullOrEmpty(arguments)) psi.Arguments = arguments;
                 psi.UseShellExecute = true;
                 psi.WindowStyle = ProcessWindowStyle.Normal;
-                string dir = Path.GetDirectoryName(filePath);
                 if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) {
                     psi.WorkingDirectory = dir;
                 }
@@ -702,7 +784,24 @@ namespace SysControl {
                 case "launch":
                     if (args.Length > 1) {
                         string fullPath = string.Join(" ", args, 1, args.Length - 1).Trim('"');
-                        Launch(fullPath);
+                        if (fullPath.Contains("|")) {
+                            string[] parts = fullPath.Split('|');
+                            Launch(parts[0], parts.Length > 1 ? parts[1] : "", parts.Length > 2 ? parts[2] : "");
+                        } else {
+                            Launch(fullPath);
+                        }
+                    }
+                    break;
+                case "launchb64":
+                    if (args.Length > 1) {
+                        try {
+                            byte[] raw = Convert.FromBase64String(args[1]);
+                            string payload = Encoding.UTF8.GetString(raw);
+                            string[] parts = payload.Split('|');
+                            Launch(parts[0], parts.Length > 1 ? parts[1] : "", parts.Length > 2 ? parts[2] : "");
+                        } catch (Exception ex) {
+                            Console.WriteLine("launchb64 error: " + ex.Message);
+                        }
                     }
                     break;
                 case "cursorpos":
