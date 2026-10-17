@@ -15,7 +15,7 @@
   "main": "index.js",
   "dependencies": {
     "ansi-regex": "^6.2.2",
-    "ansi-styles": "^6.2.3",
+    "ansi-styles": "^7.0.0",
     "axios": "^1.18.1",
     "chalk": "^5.6.2",
     "cliui": "^9.0.1",
