@@ -4,7 +4,7 @@
   "devDependencies": {
     "concurrently": "^10.0.3"
   },
-  "version": "0.0.2",
+  "version": "0.0.3",
   "scripts": {
     "dev": "concurrently \"cd backend && node server.js\" \"cd frontend && npm run dev -- --host 0.0.0.0\"",
     "start": "concurrently \"cd backend && node server.js\" \"cd frontend && npm run preview -- --host 0.0.0.0\"",
