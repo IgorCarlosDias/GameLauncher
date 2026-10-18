@@ -515,6 +515,93 @@ async function syncSteamPlaytimesInMemory(force = false) {
 }
 
 // =========================
+// DESCOBERTA DE EXECUTÁVEIS DO JOGO (INCLUINDO UNREAL *-Shipping.exe E LAUNCHERS)
+// =========================
+
+const IGNORED_SUBFOLDERS = new Set([
+  "_commonredist",
+  "redist",
+  "directx",
+  "vc",
+  "support",
+  "installer",
+  "easyanticheat",
+  "battleye",
+  "unverum",
+  "mods",
+  "modmanager",
+  "crashreporter",
+]);
+
+const IGNORED_HELPER_EXE_REGEX =
+  /(unins|crash|redist|setup|dxsetup|vcredist|ue4prereq|ueprereq|unitycrash|easyanticheat|battleye|quicksfv|rapidcrc|fitgirl-launcher|installermessage|language[\s._-]*selector|language[\s._-]*changer|modmanager|updater|smartsteamloader|jfaddslots|quickbms|u4pak|umodel|elevate|dotnetprobe|windowsdesktop-runtime|gpu-capabilities|probe|protocolselector|gamingrepair|crs-handler|crs-video|pkhex|mymc|w9xpopen|cdztool|hedgemodmanager|trainer|qtwebengineprocess)/i;
+
+function scanGameDirExecutables(dir, depth = 0, maxDepth = 3) {
+  if (depth > maxDepth || !dir) return [];
+  let found = [];
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (IGNORED_SUBFOLDERS.has(entry.name.toLowerCase())) continue;
+      found = found.concat(scanGameDirExecutables(full, depth + 1, maxDepth));
+    } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".exe")) {
+      if (!IGNORED_HELPER_EXE_REGEX.test(entry.name)) {
+        found.push(entry.name);
+      }
+    }
+  }
+  return found;
+}
+
+function discoverGameExecutables(targetPath, fallbackExe) {
+  const result = [];
+  const addUnique = (exe) => {
+    if (!exe || typeof exe !== "string") return;
+    if (!exe.toLowerCase().endsWith(".exe")) return;
+    if (!result.some((item) => item.toLowerCase() === exe.toLowerCase())) {
+      result.push(exe);
+    }
+  };
+
+  if (!targetPath || !fs.existsSync(targetPath)) {
+    addUnique(fallbackExe);
+    return result;
+  }
+
+  const primaryExe = path.basename(targetPath);
+  const gameDir = path.dirname(targetPath);
+  const dirExes = scanGameDirExecutables(gameDir, 0, 3);
+
+  // 1. Prioriza binários reais da Unreal Engine (*-Shipping.exe)
+  for (const exe of dirExes) {
+    if (/-shipping\.exe$/i.test(exe)) {
+      addUnique(exe);
+    }
+  }
+
+  // 2. Adiciona o executável principal (se não for um launcher/instalador auxiliar)
+  if (!IGNORED_HELPER_EXE_REGEX.test(primaryExe)) {
+    addUnique(primaryExe);
+  }
+
+  // 3. Adiciona outros executáveis válidos encontrados na pasta do jogo
+  for (const exe of dirExes) {
+    addUnique(exe);
+  }
+
+  // 4. Garante que o executável principal esteja na lista como fallback
+  addUnique(primaryExe);
+
+  return result;
+}
+
+// =========================
 // CARREGA E SINCRONIZA JOGOS (PARALELO + SQLITE)
 // =========================
 
@@ -547,14 +634,17 @@ async function loadGames() {
       const rawName = path.basename(file, ext);
 
       let resolvedExe = null;
+      let candidateExes = [];
       let steamId = null;
 
       if (ext === ".lnk") {
         const sc = await resolveShortcut(file);
         if (sc && sc.target) {
-          resolvedExe = path.basename(sc.target);
+          candidateExes = discoverGameExecutables(sc.target, path.basename(sc.target));
+          resolvedExe = candidateExes[0] || path.basename(sc.target);
         } else {
           resolvedExe = rawName + ".exe";
+          candidateExes = [resolvedExe];
         }
       } else if (ext === ".url") {
         try {
@@ -563,8 +653,10 @@ async function loadGames() {
           if (match) steamId = match[1];
         } catch {}
         resolvedExe = rawName + ".exe";
+        candidateExes = [resolvedExe];
       } else {
-        resolvedExe = path.basename(file);
+        candidateExes = discoverGameExecutables(file, path.basename(file));
+        resolvedExe = candidateExes[0] || path.basename(file);
       }
 
       // Verifica se já existe no banco SQLite
@@ -632,6 +724,7 @@ async function loadGames() {
         extension: dbRow.extension,
         cover: dbRow.cover,
         resolvedExe: dbRow.resolved_exe,
+        candidateExes: candidateExes.length > 0 ? candidateExes : [dbRow.resolved_exe].filter(Boolean),
         steamId: dbRow.steam_id,
         playTime: dbRow.play_time || 0,
         playCount: dbRow.play_count || 0,
@@ -824,6 +917,29 @@ function getProcessStartTime(pid) {
   });
 }
 
+// Procura o primeiro executável em execução dentre uma lista de candidatos do jogo
+async function findAnyProcessPid(exeCandidates) {
+  const list = Array.isArray(exeCandidates)
+    ? exeCandidates.filter(Boolean)
+    : [exeCandidates].filter(Boolean);
+  if (list.length === 0) return null;
+
+  const processes = await listRunningProcesses();
+  if (processes) {
+    for (const exe of list) {
+      const pid = processes.get(exe.toLowerCase());
+      if (pid) return { pid, exeName: exe };
+    }
+  }
+
+  for (const exe of list) {
+    const pid = await findProcessPid(exe);
+    if (pid) return { pid, exeName: exe };
+  }
+
+  return null;
+}
+
 // Índice executável -> jogo. Descarta executáveis genéricos e os compartilhados por mais de
 // um jogo (ex.: um mesmo launcher em vários atalhos), pois não dá para saber qual deles está aberto.
 function buildExecutableIndex() {
@@ -831,10 +947,18 @@ function buildExecutableIndex() {
 
   for (const game of games) {
     if (game.extension === ".url") continue;
-    const exe = (game.resolvedExe || "").toLowerCase();
-    if (!exe.endsWith(".exe") || GENERIC_EXECUTABLES.has(exe)) continue;
-    if (!byExe.has(exe)) byExe.set(exe, []);
-    byExe.get(exe).push(game);
+    const candidates =
+      Array.isArray(game.candidateExes) && game.candidateExes.length > 0
+        ? game.candidateExes
+        : [game.resolvedExe].filter(Boolean);
+
+    for (const rawExe of candidates) {
+      const exe = (rawExe || "").toLowerCase();
+      if (!exe.endsWith(".exe") || GENERIC_EXECUTABLES.has(exe)) continue;
+      if (!byExe.has(exe)) byExe.set(exe, []);
+      const list = byExe.get(exe);
+      if (!list.includes(game)) list.push(game);
+    }
   }
 
   for (const [exe, list] of byExe) {
@@ -855,17 +979,25 @@ async function detectExternalGames() {
   if (!processes) return []; // falha ao listar processos: não altera nada
 
   const candidates = [];
+  const seenGameIds = new Set();
 
   if (steamAppId) {
     const steamGame = games.find((g) => g.extension === ".url" && g.steamId === steamAppId);
     if (steamGame) {
-      candidates.push({ game: steamGame, via: "steam", pid: null, token: `steam:${steamAppId}` });
+      seenGameIds.add(steamGame.id);
+      candidates.push({ game: steamGame, via: "steam", pid: null, exeName: steamGame.resolvedExe, token: `steam:${steamAppId}` });
     }
   }
 
   for (const [exe, [game]] of buildExecutableIndex()) {
+    if (seenGameIds.has(game.id)) continue;
     const pid = processes.get(exe);
-    if (pid) candidates.push({ game, via: "exe", pid, token: `pid:${pid}` });
+    if (pid) {
+      seenGameIds.add(game.id);
+      const matchedExe =
+        (game.candidateExes || []).find((c) => c.toLowerCase() === exe) || game.resolvedExe;
+      candidates.push({ game, via: "exe", pid, exeName: matchedExe, token: `pid:${pid}` });
+    }
   }
 
   // Limpa ignorados cujo processo já fechou
@@ -900,12 +1032,13 @@ async function detectExternalGames() {
 const detectExternalGame = async () => (await detectExternalGames())[0] || null;
 
 // Passa a monitorar um jogo encontrado em execução
-async function adoptDetectedGame({ game, via, pid }) {
+async function adoptDetectedGame({ game, via, pid, exeName }) {
   if (activeGames.has(game.id)) return;
 
   const startedAt = (pid && (await getProcessStartTime(pid))) || new Date().toISOString();
   if (activeGames.has(game.id)) return;
 
+  const activeExe = exeName || game.resolvedExe;
   const newActive = {
     id: game.id,
     name: game.name,
@@ -913,7 +1046,8 @@ async function adoptDetectedGame({ game, via, pid }) {
     extension: game.extension,
     cover: game.cover,
     pid: pid || null,
-    exeName: game.resolvedExe,
+    exeName: activeExe,
+    candidateExes: game.candidateExes || [activeExe].filter(Boolean),
     steamId: game.steamId,
     startedAt,
     initialPlayTime: game.playTime || 0,
@@ -938,7 +1072,7 @@ async function adoptDetectedGame({ game, via, pid }) {
 
   console.log(
     `[Auto-Detect] Jogo detectado fora do launcher: ${game.name} ` +
-      `(${via === "steam" ? `Steam AppID ${game.steamId}` : `${game.resolvedExe}, PID ${pid}`})`
+      `(${via === "steam" ? `Steam AppID ${game.steamId}` : `${activeExe}, PID ${pid}`})`
   );
 }
 
@@ -1154,6 +1288,7 @@ app.post("/play", systemActionLimiter, async (req, res) => {
       cover: game.cover,
       pid: null,
       exeName: exeName,
+      candidateExes: game.candidateExes || [exeName].filter(Boolean),
       steamId: steamId,
       startedAt: nowIso,
       initialPlayTime: game.playTime || 0,
@@ -1166,12 +1301,13 @@ app.post("/play", systemActionLimiter, async (req, res) => {
     // Detecta o PID nos primeiros segundos
     setTimeout(async () => {
       const target = activeGames.get(game.id);
-      if (target && !target.pid && exeName) {
-        const detectedPid = await findProcessPid(exeName);
-        if (detectedPid && activeGames.has(game.id)) {
-          target.pid = detectedPid;
+      if (target && !target.pid) {
+        const found = await findAnyProcessPid(target.candidateExes || [target.exeName]);
+        if (found && activeGames.has(game.id)) {
+          target.pid = found.pid;
+          target.exeName = found.exeName;
           target.seenRunning = true;
-          console.log(`PID detectado para ${target.name}: ${detectedPid}`);
+          console.log(`PID detectado para ${target.name}: ${found.pid} (${found.exeName})`);
         }
       }
     }, 2000);
@@ -1211,6 +1347,7 @@ function syncActiveGameState() {
       // 1. Verifica individualmente cada jogo monitorado em activeGames
       for (const [gameId, ag] of Array.from(activeGames.entries())) {
         const ageMs = Date.now() - new Date(ag.startedAt).getTime();
+        const exeCandidates = ag.candidateExes || [ag.exeName].filter(Boolean);
 
         if (ag.steamId && ag.extension === ".url") {
           if (runningSteamAppId === ag.steamId) {
@@ -1224,19 +1361,21 @@ function syncActiveGameState() {
           if (alive) {
             ag.seenRunning = true;
           } else {
-            const newPid = await findProcessPid(ag.exeName);
-            if (newPid) {
-              ag.pid = newPid;
+            const found = await findAnyProcessPid(exeCandidates);
+            if (found) {
+              ag.pid = found.pid;
+              ag.exeName = found.exeName;
               ag.seenRunning = true;
             } else if (ag.seenRunning || ageMs > 25000) {
               console.log(`[Auto-Detect] O jogo ${ag.name} foi fechado no PC.`);
               await finishActiveGameSession(gameId);
             }
           }
-        } else if (ag.exeName) {
-          const detectedPid = await findProcessPid(ag.exeName);
-          if (detectedPid) {
-            ag.pid = detectedPid;
+        } else if (exeCandidates.length > 0) {
+          const found = await findAnyProcessPid(exeCandidates);
+          if (found) {
+            ag.pid = found.pid;
+            ag.exeName = found.exeName;
             ag.seenRunning = true;
           } else if (ag.extension !== ".url" && ageMs > 30000) {
             console.log(`[Auto-Detect] Processo ${ag.exeName} não encontrado após 30s.`);
@@ -1304,7 +1443,7 @@ app.post("/system/close-game", systemActionLimiter, async (req, res) => {
       if (targetToCheck) {
         const stillAlive = targetToCheck.pid
           ? await isPidRunning(targetToCheck.pid)
-          : await findProcessPid(targetToCheck.exeName);
+          : Boolean(await findAnyProcessPid(targetToCheck.candidateExes || [targetToCheck.exeName]));
         if (!stillAlive) {
           await finishActiveGameSession(targetToCheck.id);
         }
@@ -1327,21 +1466,31 @@ app.post("/system/close-game", systemActionLimiter, async (req, res) => {
   if (current) {
     if (current.pid) pidTargets.add(current.pid);
     if (current.exeName) imTargets.add(current.exeName);
+    if (Array.isArray(current.candidateExes)) {
+      for (const exe of current.candidateExes) imTargets.add(exe);
+    }
   }
 
   if (id) {
     const g = games.find((item) => item.id === id);
-    if (g && g.resolvedExe) imTargets.add(g.resolvedExe);
+    if (g) {
+      if (g.resolvedExe) imTargets.add(g.resolvedExe);
+      if (Array.isArray(g.candidateExes)) {
+        for (const exe of g.candidateExes) imTargets.add(exe);
+      }
+    }
   }
 
   // Valida customExe contra os executáveis conhecidos na biblioteca para impedir injeção
   if (customExe && typeof customExe === "string") {
     const normalizedExe = customExe.trim().toLowerCase();
-    const matchedGame = games.find(
-      (item) => item.resolvedExe && item.resolvedExe.toLowerCase() === normalizedExe
-    );
-    if (matchedGame && matchedGame.resolvedExe) {
-      imTargets.add(matchedGame.resolvedExe);
+    for (const item of games) {
+      const candidates = item.candidateExes || [item.resolvedExe].filter(Boolean);
+      for (const c of candidates) {
+        if (c && c.toLowerCase() === normalizedExe) {
+          imTargets.add(c);
+        }
+      }
     }
   }
 
