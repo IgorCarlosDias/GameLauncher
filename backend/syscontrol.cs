@@ -239,9 +239,9 @@ namespace SysControl {
 
         static void AttachToInteractiveDesktop() {
             try {
-                IntPtr hDesk = OpenInputDesktop(0, false, 0x01FF);
+                IntPtr hDesk = OpenDesktopW("Default", 0, false, 0x01FF);
                 if (hDesk == IntPtr.Zero) {
-                    hDesk = OpenDesktopW("Default", 0, false, 0x01FF);
+                    hDesk = OpenInputDesktop(0, false, 0x01FF);
                 }
                 if (hDesk != IntPtr.Zero) {
                     SetThreadDesktop(hDesk);
@@ -426,42 +426,51 @@ namespace SysControl {
                 }
             }
 
-            // 1. Primary: Shell.Application (delegates to explorer.exe on the interactive user desktop WinSta0\Default)
-            try {
-                Type shellType = Type.GetTypeFromProgID("Shell.Application");
-                if (shellType != null) {
-                    object shell = Activator.CreateInstance(shellType);
-                    shellType.InvokeMember("ShellExecute",
-                        System.Reflection.BindingFlags.InvokeMethod,
-                        null, shell, new object[] { filePath, arguments ?? "", dir, "open", 1 });
-                    Console.WriteLine("Launched via Shell.Application");
-                    return;
+            string cwd = (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) ? dir : null;
+
+            // 1. Primary for direct .exe files: Win32 CreateProcessW directly on winsta0\default with SW_SHOWNORMAL
+            if (!isUri && File.Exists(filePath) && filePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) {
+                try {
+                    STARTUPINFOW siDirect = new STARTUPINFOW();
+                    siDirect.cb = Marshal.SizeOf(typeof(STARTUPINFOW));
+                    siDirect.lpDesktop = "winsta0\\default";
+                    siDirect.dwFlags = 0x00000001; // STARTF_USESHOWWINDOW
+                    siDirect.wShowWindow = 1;     // SW_SHOWNORMAL
+
+                    PROCESS_INFORMATION piDirect;
+                    string directCmd = "\"" + filePath + "\"" +
+                        (string.IsNullOrEmpty(arguments) ? "" : (" " + arguments));
+
+                    if (CreateProcessW(filePath, directCmd, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, cwd, ref siDirect, out piDirect)) {
+                        if (piDirect.hProcess != IntPtr.Zero) CloseHandle(piDirect.hProcess);
+                        if (piDirect.hThread != IntPtr.Zero) CloseHandle(piDirect.hThread);
+                        Console.WriteLine("Launched via CreateProcessW direct (winsta0\\default) PID=" + piDirect.dwProcessId);
+                        return;
+                    }
+                } catch (Exception ex) {
+                    Console.WriteLine("CreateProcessW direct error: " + ex.Message);
                 }
-            } catch (Exception ex) {
-                Console.WriteLine("Shell.Application error: " + ex.Message);
             }
 
-            // 2. Fallback: Win32 CreateProcessW explicitly targeting WinSta0\Default with SW_SHOWNORMAL
+            // 2. For URIs (steam://...), shortcuts, or UAC-elevated .exe (Error 740):
+            //    Run cmd.exe /c start "" on winsta0\default so ShellExecuteEx runs on the interactive desktop
             try {
                 STARTUPINFOW si = new STARTUPINFOW();
                 si.cb = Marshal.SizeOf(typeof(STARTUPINFOW));
                 si.lpDesktop = "winsta0\\default";
-                si.dwFlags = 0x00000001; // STARTF_USESHOWWINDOW
-                si.wShowWindow = 1;     // SW_SHOWNORMAL
 
                 PROCESS_INFORMATION pi;
                 string cmdLine = "cmd.exe /c start \"\" \"" + filePath + "\"" +
                     (string.IsNullOrEmpty(arguments) ? "" : (" " + arguments));
-                string cwd = (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) ? dir : null;
 
-                if (CreateProcessW(null, cmdLine, IntPtr.Zero, IntPtr.Zero, false, 0x00000010, IntPtr.Zero, cwd, ref si, out pi)) {
+                if (CreateProcessW(null, cmdLine, IntPtr.Zero, IntPtr.Zero, false, 0x08000000, IntPtr.Zero, cwd, ref si, out pi)) {
                     if (pi.hProcess != IntPtr.Zero) CloseHandle(pi.hProcess);
                     if (pi.hThread != IntPtr.Zero) CloseHandle(pi.hThread);
-                    Console.WriteLine("Launched via CreateProcessW(winsta0\\default)");
+                    Console.WriteLine("Launched via CreateProcessW cmd/start (winsta0\\default)");
                     return;
                 }
             } catch (Exception ex) {
-                Console.WriteLine("CreateProcessW error: " + ex.Message);
+                Console.WriteLine("CreateProcessW cmd/start error: " + ex.Message);
             }
 
             // 3. Final fallback: Process.Start
@@ -471,8 +480,8 @@ namespace SysControl {
                 if (!string.IsNullOrEmpty(arguments)) psi.Arguments = arguments;
                 psi.UseShellExecute = true;
                 psi.WindowStyle = ProcessWindowStyle.Normal;
-                if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) {
-                    psi.WorkingDirectory = dir;
+                if (cwd != null) {
+                    psi.WorkingDirectory = cwd;
                 }
                 Process.Start(psi);
                 Console.WriteLine("Launched via Process.Start");
