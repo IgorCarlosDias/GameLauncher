@@ -1,29 +1,29 @@
 {
   "version": "1.0",
-  "updatedAt": "2026-10-19T17:43:53.819Z",
+  "updatedAt": "2026-10-19T19:47:50.655Z",
   "summary": {
-    "couchTimeSeconds": 1404894,
-    "couchTimeFormatted": "390h 14m",
+    "couchTimeSeconds": 1405242,
+    "couchTimeFormatted": "390h 20m",
     "couchTimeOffsetSeconds": 0,
-    "gamesPlayTimeSeconds": 1404894,
-    "gamesPlayTimeFormatted": "390h 14m",
-    "sessionsTotalDurationSeconds": 3912,
-    "sessionsTotalDurationFormatted": "1h 5m",
+    "gamesPlayTimeSeconds": 1405242,
+    "gamesPlayTimeFormatted": "390h 20m",
+    "sessionsTotalDurationSeconds": 4260,
+    "sessionsTotalDurationFormatted": "1h 11m",
     "activeSessionSeconds": 0,
     "activeSessionFormatted": "0m",
-    "totalPlayCount": 117,
-    "totalSessionsRecorded": 100,
+    "totalPlayCount": 118,
+    "totalSessionsRecorded": 101,
     "totalGames": 47,
     "playedGamesCount": 19,
     "unplayedGamesCount": 28,
     "favoritesCount": 0,
-    "lastPlayedAt": "2026-10-19T17:41:04.000Z",
+    "lastPlayedAt": "2026-10-19T17:54:59.771Z",
     "lastPlayedGame": {
-      "id": 8,
-      "name": "Devil May Cry 5",
-      "lastPlayed": "2026-10-19T17:41:04.000Z",
-      "playTimeSeconds": 860280,
-      "playTimeFormatted": "238h 58m"
+      "id": 41,
+      "name": "DRAGON BALL Sparking! ZERO",
+      "lastPlayed": "2026-10-19T17:54:59.771Z",
+      "playTimeSeconds": 620,
+      "playTimeFormatted": "10m"
     },
     "mostPlayedGame": {
       "id": 8,
@@ -260,6 +260,22 @@
       "lastPlayed": "2026-10-19T17:34:57.195Z"
     },
     {
+      "id": 41,
+      "name": "DRAGON BALL Sparking! ZERO",
+      "originalName": "DRAGON BALL Sparking! ZERO",
+      "customName": null,
+      "path": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\DRAGON BALL Sparking! ZERO.lnk",
+      "extension": ".lnk",
+      "resolvedExe": "SparkingZERO-Win64-Shipping.exe",
+      "steamId": null,
+      "cover": "dragon-ball-sparking-zero.jpg",
+      "favorite": false,
+      "playTime": 620,
+      "playTimeFormatted": "10m",
+      "playCount": 11,
+      "lastPlayed": "2026-10-19T17:54:59.771Z"
+    },
+    {
       "id": 2,
       "name": "KartRider Drift",
       "originalName": "KartRider Drift",
@@ -290,22 +306,6 @@
       "playTimeFormatted": "5m",
       "playCount": 1,
       "lastPlayed": "2026-05-10T21:54:50.000Z"
-    },
-    {
-      "id": 41,
-      "name": "DRAGON BALL Sparking! ZERO",
-      "originalName": "DRAGON BALL Sparking! ZERO",
-      "customName": null,
-      "path": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\DRAGON BALL Sparking! ZERO.lnk",
-      "extension": ".lnk",
-      "resolvedExe": "SparkingZERO-Win64-Shipping.exe",
-      "steamId": null,
-      "cover": "dragon-ball-sparking-zero.jpg",
-      "favorite": false,
-      "playTime": 272,
-      "playTimeFormatted": "4m",
-      "playCount": 10,
-      "lastPlayed": "2026-10-18T00:46:25.843Z"
     },
     {
       "id": 28,
@@ -1888,6 +1888,17 @@
       "endedAt": "2026-10-19T17:40:47.807Z",
       "duration": 24,
       "durationFormatted": "24s"
+    },
+    {
+      "id": 101,
+      "gameId": 41,
+      "gameName": "DRAGON BALL Sparking! ZERO",
+      "gameOriginalName": "DRAGON BALL Sparking! ZERO",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\DRAGON BALL Sparking! ZERO.lnk",
+      "startedAt": "2026-10-19T17:49:11.221Z",
+      "endedAt": "2026-10-19T17:54:59.771Z",
+      "duration": 348,
+      "durationFormatted": "5m"
     }
   ]
 }

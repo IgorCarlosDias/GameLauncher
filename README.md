@@ -98,6 +98,90 @@ GameLauncher
     └── package.json
 ```
 
+### 🔒 Segurança & Controle de Acesso (v1.1.0)
+- **🛡️ Token de Autenticação (`API_TOKEN`)**: Todas as ações do sistema (abrir jogo, energia, mouse, teclado, configurações, sync) exigem token de autenticação protegido contra ataques de temporização (`crypto.timingSafeEqual`).
+- **🌐 CORS Restrito**: Aceita requisições exclusivamente da origem do Frontend (`http://SERVER_IP:8060`).
+- **🏡 Proteção de Sub-rede Local**: Backend e Frontend bloqueiam automaticamente conexões originadas fora da sua sub-rede privada (`192.168.0.0/24`, `10.0.0.0/8`, `172.16.0.0/12`).
+- **🧱 Regras Automatizadas no Firewall do Windows**: Scripts inclusos (`setup-firewall.bat` / `setup-firewall.ps1`) para liberar as portas `3060` e `8060` apenas para a rede local, sem expor portas para outras redes.
+- **☁️ Sincronização em Nuvem Segura (Supabase RLS)**: Suporte a backup em tempo real de tempos e sessões com autenticação direta (`to authenticated`). As chaves de API nunca são expostas em texto puro na interface (`••••••••XXXX`).
+
+---
+
+## 🖥️ Arquitetura
+
+```
+Celular (PWA / Navegador na Rede Local)
+   │
+   │  HTTP REST API (Headers: x-api-token | CORS Restrito)
+   ▼
+React 19 + Vite Frontend (Porta 8060)
+   │  (Filtro de Sub-rede Local 192.168.0.0/24)
+   ▼
+Node.js + Express Backend (Porta 3060)
+   ├── SQLite (better-sqlite3) ──► Favoritos, Tempo de Jogo, Capas e Metadados
+   ├── SteamGridDB Service     ──► Busca e Download Automático de Capas
+   ├── Supabase Sync (RLS)     ──► Backup Contínuo e Sincronização em Nuvem
+   └── syscontrol.exe (C#/Win32) ─► CoreAudio, IPolicyConfig, SendInput (Mouse/Teclado)
+```
+
+---
+
+## 🛠️ Tecnologias Utilizadas
+
+### Frontend
+- **React 19** + **Vite**
+- **Axios** com interceptor para autenticação via `x-api-token`
+- **HTML5 Canvas** (rastro interativo do Trackpad Virtual)
+- **CSS3 Moderno** (Design responsivo Dark Glassmorphism + PWA Manifest)
+
+### Backend & Automação Nativa
+- **Node.js** + **Express 5**
+- **SQLite (`better-sqlite3`)** para banco de dados local zero-config
+- **Supabase JS Client** com suporte a autenticação por usuário e RLS
+- **C# / Win32 Native Helper (`syscontrol.cs` / `syscontrol.exe`)**:
+  - `IAudioEndpointVolume` & `IPolicyConfig` para controle de volume master e troca instantânea de saída de áudio no Windows
+  - `SendInput` Unicode & Mouse 1:1 com suporte a sessão interativa (`WinSta0\Default`)
+- **SteamGridDB API** para busca automática e galeria de capas
+
+---
+
+## 📂 Estrutura do Projeto
+
+```
+GameLauncher
+│
+├── .env.example                 # Modelo centralizado de variáveis de ambiente
+├── start-gamelauncher.bat       # Script para iniciar Backend + Frontend
+├── start-hidden.vbs             # Inicializador invisível em segundo plano (bandeja/tarefas)
+├── stop-gamelauncher.bat        # Script para encerrar os servidores
+├── setup-firewall.bat           # Configuração rápida de regras de sub-rede no Firewall
+├── setup-firewall.ps1           # Script PowerShell elevado para regras restritas de firewall
+│
+├── backend
+│   ├── server.js                # API Express, validações de segurança, scanner e rotas
+│   ├── database.js              # Camada de persistência SQLite (jogos, favoritos, playtime)
+│   ├── syscontrol.cs            # Código-fonte do controlador nativo Win32/CoreAudio em C#
+│   ├── syscontrol.exe           # Binário nativo compilado para controle rápido do Windows
+│   ├── services
+│   │   ├── steamgriddb.js       # Integração com a API do SteamGridDB
+│   │   └── supabaseSync.js      # Sincronização em nuvem e login autenticado no Supabase
+│   ├── supabase_rls_authenticated.sql # Script SQL para aplicar RLS no Supabase
+│   ├── covers                   # Cache local das capas baixadas
+│   ├── .env.example
+│   └── package.json
+│
+└── frontend
+    ├── public
+    │   └── manifest.json        # Configuração PWA para instalação no celular
+    ├── src
+    │   ├── App.jsx              # Interface principal, Trackpad Canvas e Configurações
+    │   ├── main.jsx
+    │   └── index.css            # Estilização completa e animações
+    ├── vite.config.js           # Configuração Vite com proteção de sub-rede local
+    ├── .env.example
+    └── package.json
+```
+
 ---
 
 ## ⚙️ Instalação e Configuração
@@ -106,7 +190,6 @@ GameLauncher
 - **Windows 10 / 11**
 - **Node.js** (v18 ou superior)
 - Computador e celular conectados na mesma rede local (Wi-Fi / Cabo)
-- Portas `8060` (Frontend) e `3060` (Backend) liberadas no Firewall do Windows
 
 ### 1. Clonar e Instalar Dependências
 
@@ -120,7 +203,7 @@ cd ../frontend && npm install
 
 ### 2. Configurar os Arquivos `.env`
 
-Todo o endereçamento de IP e portas do projeto é controlado via `.env` (use os arquivos `.env.example` como base):
+Copie os modelos de `.env.example` e ajuste os valores:
 
 **Na raiz (`.env`) e em `backend/.env`:**
 ```env
@@ -129,6 +212,13 @@ PORT=3060
 FRONTEND_PORT=8060
 GAME_FOLDER=C:\Caminho\Dos\Seus\Jogos
 STEAMGRIDDB_KEY=sua_chave_api_do_steamgriddb
+API_TOKEN=gl_sec_seu_token_aqui
+
+# Opcional: Sincronização em Nuvem (Supabase)
+SUPABASE_URL=https://xyz.supabase.co
+SUPABASE_KEY=sb_publishable_...
+SUPABASE_EMAIL=admin@gamelauncher.local
+SUPABASE_PASSWORD=sua_senha_supabase
 ```
 
 **Em `frontend/.env`:**
@@ -137,19 +227,23 @@ VITE_SERVER_IP=192.168.0.204
 VITE_API_PORT=3060
 VITE_PORT=8060
 VITE_API_URL=http://192.168.0.204:3060
+VITE_API_TOKEN=gl_sec_seu_token_aqui
 ```
 
-> 💡 **Dica**: Caso precise recompilar o utilitário nativo `syscontrol.exe` após editar `backend/syscontrol.cs`, execute:
-> ```powershell
-> C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:exe /out:backend\syscontrol.exe backend\syscontrol.cs
-> ```
+### 3. Configurar Firewall do Windows (Recomendado)
 
-### 3. Executar o GameLauncher
+Execute como Administrador ou dê dois cliques em:
+```text
+setup-firewall.bat
+```
+Isso cria regras liberando as portas `3060` e `8060` estritamente para a sua sub-rede local (`192.168.0.0/24`), bloqueando qualquer tentativa externa. Se você formatar o PC ou trocar de rede, basta executar esse script novamente.
+
+### 4. Executar o GameLauncher
 
 Você pode iniciar tudo com um único comando na raiz:
 
 ```bash
-npm start
+npm run dev
 ```
 Ou usar os atalhos do Windows:
 - **`start-gamelauncher.bat`**: Inicia os servidores exibindo o status.

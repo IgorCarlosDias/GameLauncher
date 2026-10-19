@@ -5,6 +5,25 @@ const SERVER_IP = import.meta.env.VITE_SERVER_IP || (typeof window !== "undefine
 const API_PORT = import.meta.env.VITE_API_PORT || "3060";
 const API = import.meta.env.VITE_API_URL || `http://${SERVER_IP}:${API_PORT}`;
 const APP_VERSION = import.meta.env.VITE_APP_VERSION || "1.0.0";
+const DEFAULT_API_TOKEN = import.meta.env.VITE_API_TOKEN || "";
+
+function getActiveApiToken() {
+  if (typeof window === "undefined") return DEFAULT_API_TOKEN;
+  try {
+    return localStorage.getItem("gamelauncher_api_token") || DEFAULT_API_TOKEN;
+  } catch {
+    return DEFAULT_API_TOKEN;
+  }
+}
+
+axios.interceptors.request.use((config) => {
+  const token = getActiveApiToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers["x-api-token"] = token;
+  }
+  return config;
+});
 
 // Haptic feedback helper for mobile touch devices
 function triggerHaptic(ms = 22) {
@@ -106,17 +125,37 @@ export default function App() {
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showSupabaseKey, setShowSupabaseKey] = useState(false);
+  const [showSupabasePassword, setShowSupabasePassword] = useState(false);
+  const [showApiToken, setShowApiToken] = useState(false);
   const [folderValidation, setFolderValidation] = useState(null);
   const [validatingFolder, setValidatingFolder] = useState(false);
   const [apiKeyTestResult, setApiKeyTestResult] = useState(null);
   const [testingApiKey, setTestingApiKey] = useState(false);
   const [networkInterfaces, setNetworkInterfaces] = useState([]);
+  const [supabaseStatus, setSupabaseStatus] = useState(null);
+  const [supabaseSyncing, setSupabaseSyncing] = useState(false);
+  const [supabaseLoading, setSupabaseLoading] = useState(false);
+  const [settingsSecretsMeta, setSettingsSecretsMeta] = useState({
+    hasSteamGridDbKey: false,
+    steamGridDbKeyHint: "",
+    hasSupabaseKey: false,
+    supabaseKeyHint: "",
+    hasSupabasePassword: false,
+    hasApiToken: false,
+    apiTokenHint: "",
+  });
   const [settingsForm, setSettingsForm] = useState({
     serverIp: SERVER_IP,
     port: Number(API_PORT) || 3060,
     frontendPort: 8060,
     gameFolder: "",
     steamGridDbKey: "",
+    supabaseUrl: "",
+    supabaseKey: "",
+    supabaseEmail: "",
+    supabasePassword: "",
+    apiToken: "",
     autoDetectGames: true,
     monitorIntervalSec: 8,
     shutdownTimerSec: 30,
@@ -170,12 +209,26 @@ export default function App() {
       if (res.data?.success) {
         const env = res.data.env || {};
         const auto = res.data.automation || {};
+        setSettingsSecretsMeta({
+          hasSteamGridDbKey: Boolean(env.hasSteamGridDbKey),
+          steamGridDbKeyHint: env.steamGridDbKeyHint || "",
+          hasSupabaseKey: Boolean(env.hasSupabaseKey),
+          supabaseKeyHint: env.supabaseKeyHint || "",
+          hasSupabasePassword: Boolean(env.hasSupabasePassword),
+          hasApiToken: Boolean(env.hasApiToken),
+          apiTokenHint: env.apiTokenHint || "",
+        });
         setSettingsForm({
           serverIp: env.serverIp || SERVER_IP,
           port: env.port || Number(API_PORT) || 3060,
           frontendPort: env.frontendPort || 8060,
           gameFolder: env.gameFolder || "",
-          steamGridDbKey: env.steamGridDbKey || "",
+          steamGridDbKey: "",
+          supabaseUrl: env.supabaseUrl || "",
+          supabaseKey: "",
+          supabaseEmail: env.supabaseEmail || "",
+          supabasePassword: "",
+          apiToken: "",
           autoDetectGames: auto.autoDetectGames !== undefined ? Boolean(auto.autoDetectGames) : true,
           monitorIntervalSec: Number(auto.monitorIntervalSec) || 8,
           shutdownTimerSec: Number(auto.shutdownTimerSec) || 30,
@@ -189,6 +242,9 @@ export default function App() {
         if (Array.isArray(res.data.networkInterfaces)) {
           setNetworkInterfaces(res.data.networkInterfaces);
         }
+        if (openModal) {
+          checkSupabaseStatus();
+        }
       }
     } catch (err) {
       console.error("Erro carregando configurações:", err);
@@ -197,6 +253,62 @@ export default function App() {
       }
     } finally {
       setSettingsLoading(false);
+    }
+  }
+
+  // Checar status do Supabase
+  async function checkSupabaseStatus() {
+    try {
+      setSupabaseLoading(true);
+      const res = await axios.get(`${API}/supabase/status`);
+      if (res.data?.success) {
+        setSupabaseStatus(res.data);
+      }
+    } catch (err) {
+      console.warn("Erro ao checar Supabase:", err);
+    } finally {
+      setSupabaseLoading(false);
+    }
+  }
+
+  // Enviar tempos para o Supabase (Push)
+  async function triggerSupabasePush() {
+    triggerHaptic(25);
+    setSupabaseSyncing(true);
+    try {
+      const res = await axios.post(`${API}/supabase/push`);
+      if (res.data?.success) {
+        showToast("☁️ Tempos enviados para o Supabase com sucesso!", "success");
+        checkSupabaseStatus();
+        loadPlaytimeSummary();
+      } else {
+        showToast(res.data?.message || "Falha ao enviar para o Supabase", "error");
+      }
+    } catch (err) {
+      showToast(err.response?.data?.message || "Erro ao conectar com Supabase", "error");
+    } finally {
+      setSupabaseSyncing(false);
+    }
+  }
+
+  // Puxar tempos do Supabase (Pull / Restaurar)
+  async function triggerSupabasePull(mode = "merge") {
+    triggerHaptic(25);
+    setSupabaseSyncing(true);
+    try {
+      const res = await axios.post(`${API}/supabase/pull`, { mode });
+      if (res.data?.success) {
+        showToast("📥 Tempos restaurados da nuvem com sucesso!", "success");
+        checkSupabaseStatus();
+        loadPlaytimeSummary();
+        loadGames();
+      } else {
+        showToast(res.data?.message || "Falha ao puxar da nuvem", "error");
+      }
+    } catch (err) {
+      showToast(err.response?.data?.message || "Erro ao baixar do Supabase", "error");
+    } finally {
+      setSupabaseSyncing(false);
     }
   }
 
@@ -252,6 +364,7 @@ export default function App() {
     triggerHaptic(35);
     setSettingsSaving(true);
     try {
+      const newApiToken = String(settingsForm.apiToken || "").trim();
       const res = await axios.put(`${API}/settings`, {
         env: {
           serverIp: String(settingsForm.serverIp || "").trim(),
@@ -259,6 +372,11 @@ export default function App() {
           frontendPort: Number(settingsForm.frontendPort) || 8060,
           gameFolder: String(settingsForm.gameFolder || "").trim(),
           steamGridDbKey: String(settingsForm.steamGridDbKey || "").trim(),
+          supabaseUrl: String(settingsForm.supabaseUrl || "").trim(),
+          supabaseKey: String(settingsForm.supabaseKey || "").trim(),
+          supabaseEmail: String(settingsForm.supabaseEmail || "").trim(),
+          supabasePassword: String(settingsForm.supabasePassword || "").trim(),
+          apiToken: newApiToken,
         },
         automation: {
           autoDetectGames: Boolean(settingsForm.autoDetectGames),
@@ -271,6 +389,30 @@ export default function App() {
       });
 
       if (res.data?.success) {
+        if (newApiToken) {
+          try {
+            localStorage.setItem("gamelauncher_api_token", newApiToken);
+          } catch {}
+        }
+        if (res.data.env) {
+          const env = res.data.env;
+          setSettingsSecretsMeta({
+            hasSteamGridDbKey: Boolean(env.hasSteamGridDbKey),
+            steamGridDbKeyHint: env.steamGridDbKeyHint || "",
+            hasSupabaseKey: Boolean(env.hasSupabaseKey),
+            supabaseKeyHint: env.supabaseKeyHint || "",
+            hasSupabasePassword: Boolean(env.hasSupabasePassword),
+            hasApiToken: Boolean(env.hasApiToken),
+            apiTokenHint: env.apiTokenHint || "",
+          });
+        }
+        setSettingsForm((prev) => ({
+          ...prev,
+          steamGridDbKey: "",
+          supabaseKey: "",
+          supabasePassword: "",
+          apiToken: "",
+        }));
         if (res.data.folderStatus) setFolderValidation(res.data.folderStatus);
         if (Array.isArray(res.data.networkInterfaces)) {
           setNetworkInterfaces(res.data.networkInterfaces);
@@ -2558,6 +2700,16 @@ export default function App() {
                 >
                   🔄 Ler JSON do Servidor
                 </button>
+
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={triggerSupabasePush}
+                  disabled={supabaseSyncing}
+                  title="Sincroniza os tempos locais imediatamente com o banco Supabase na nuvem"
+                >
+                  {supabaseSyncing ? "Sincronizando..." : "☁️ Sincronizar Nuvem"}
+                </button>
               </div>
             </div>
 
@@ -2774,10 +2926,19 @@ export default function App() {
                   <div className="settings-section-header">
                     <span className="settings-section-icon">🔑</span>
                     <div>
-                      <strong>Integrações & API Keys (STEAMGRIDDB_KEY)</strong>
+                      <strong>
+                        Integrações & API Keys (STEAMGRIDDB_KEY){" "}
+                        {settingsSecretsMeta.hasSteamGridDbKey ? (
+                          <span className="settings-secret-badge configured">
+                            🔒 Configurada ({settingsSecretsMeta.steamGridDbKeyHint})
+                          </span>
+                        ) : (
+                          <span className="settings-secret-badge missing">⚠️ Não configurada</span>
+                        )}
+                      </strong>
                       <p>
-                        Chave usada para baixar automaticamente as capas verticais dos jogos no
-                        SteamGridDB.
+                        Por segurança, a chave atual não é exibida na tela. Digite abaixo apenas se
+                        quiser <strong>substituir</strong> a chave atual.
                       </p>
                     </div>
                   </div>
@@ -2793,13 +2954,18 @@ export default function App() {
                           steamGridDbKey: e.target.value,
                         }))
                       }
-                      placeholder="Cole aqui sua API Key do SteamGridDB"
+                      placeholder={
+                        settingsSecretsMeta.hasSteamGridDbKey
+                          ? `Configurada (${settingsSecretsMeta.steamGridDbKeyHint}) — digite para trocar a chave`
+                          : "Cole aqui sua API Key do SteamGridDB"
+                      }
+                      autoComplete="new-password"
                     />
                     <button
                       type="button"
-                      className="btn btn-secondary"
+                      className="btn btn-secondary settings-eye-btn"
                       onClick={() => setShowApiKey((prev) => !prev)}
-                      title={showApiKey ? "Ocultar chave" : "Mostrar chave"}
+                      title={showApiKey ? "Ocultar nova chave digitada" : "Mostrar nova chave digitada"}
                     >
                       {showApiKey ? "🙈" : "👁️"}
                     </button>
@@ -2964,6 +3130,286 @@ export default function App() {
                           🪟 Alt+F4 (Suave)
                         </button>
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. Sincronização em Nuvem (Supabase) */}
+                <div className="settings-section-card">
+                  <div className="settings-section-header">
+                    <span className="settings-section-icon">☁️</span>
+                    <div>
+                      <strong>Sincronização em Nuvem (Supabase)</strong>
+                      <p>
+                        Backup contínuo com suporte a política RLS autenticada (<code>to authenticated</code>).
+                        As chaves já salvas ficam ocultas por segurança.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="settings-grid-1">
+                    <div className="settings-field">
+                      <label>SUPABASE_URL</label>
+                      <input
+                        type="text"
+                        className="keyboard-input"
+                        value={settingsForm.supabaseUrl}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({ ...prev, supabaseUrl: e.target.value }))
+                        }
+                        placeholder="https://xyz.supabase.co"
+                      />
+                    </div>
+                    <div className="settings-field">
+                      <label>
+                        SUPABASE_KEY (publishable / anon){" "}
+                        {settingsSecretsMeta.hasSupabaseKey ? (
+                          <span className="settings-secret-badge configured">
+                            🔒 Configurada ({settingsSecretsMeta.supabaseKeyHint})
+                          </span>
+                        ) : (
+                          <span className="settings-secret-badge missing">⚠️ Não configurada</span>
+                        )}
+                      </label>
+                      <div className="settings-inline-input">
+                        <input
+                          type={showSupabaseKey ? "text" : "password"}
+                          className="keyboard-input"
+                          value={settingsForm.supabaseKey}
+                          onChange={(e) =>
+                            setSettingsForm((prev) => ({ ...prev, supabaseKey: e.target.value }))
+                          }
+                          placeholder={
+                            settingsSecretsMeta.hasSupabaseKey
+                              ? `Configurada (${settingsSecretsMeta.supabaseKeyHint}) — digite apenas para trocar`
+                              : "sb_publishable_... ou anon key"
+                          }
+                          autoComplete="new-password"
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-secondary settings-eye-btn"
+                          onClick={() => setShowSupabaseKey((prev) => !prev)}
+                          title={showSupabaseKey ? "Ocultar nova chave" : "Mostrar nova chave"}
+                        >
+                          {showSupabaseKey ? "🙈" : "👁️"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="settings-grid-2" style={{ marginTop: "12px" }}>
+                    <div className="settings-field">
+                      <label>SUPABASE_EMAIL (Login RLS Autenticado)</label>
+                      <input
+                        type="email"
+                        className="keyboard-input"
+                        value={settingsForm.supabaseEmail}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({ ...prev, supabaseEmail: e.target.value }))
+                        }
+                        placeholder="Ex: admin@gamelauncher.local"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="settings-field">
+                      <label>
+                        SUPABASE_PASSWORD{" "}
+                        {settingsSecretsMeta.hasSupabasePassword ? (
+                          <span className="settings-secret-badge configured">🔒 Configurada</span>
+                        ) : (
+                          <span className="settings-secret-badge missing">Opcional se s/ RLS</span>
+                        )}
+                      </label>
+                      <div className="settings-inline-input">
+                        <input
+                          type={showSupabasePassword ? "text" : "password"}
+                          className="keyboard-input"
+                          value={settingsForm.supabasePassword}
+                          onChange={(e) =>
+                            setSettingsForm((prev) => ({
+                              ...prev,
+                              supabasePassword: e.target.value,
+                            }))
+                          }
+                          placeholder={
+                            settingsSecretsMeta.hasSupabasePassword
+                              ? "Senha configurada — digite para alterar"
+                              : "Senha do usuário Supabase (mín. 6 caracteres)"
+                          }
+                          autoComplete="new-password"
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-secondary settings-eye-btn"
+                          onClick={() => setShowSupabasePassword((prev) => !prev)}
+                          title={showSupabasePassword ? "Ocultar senha" : "Mostrar senha"}
+                        >
+                          {showSupabasePassword ? "🙈" : "👁️"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {supabaseStatus ? (
+                    <div
+                      className={`settings-status-pill settings-cloud-status ${
+                        supabaseStatus.connected
+                          ? "valid"
+                          : supabaseStatus.needTables || supabaseStatus.needAuth
+                          ? "warning"
+                          : "invalid"
+                      }`}
+                    >
+                      <span className="settings-cloud-title">
+                        {supabaseStatus.connected
+                          ? supabaseStatus.authenticated
+                            ? "🟢 Conectado e Autenticado via Login (RLS Seguro)"
+                            : "🟢 Conectado ao Supabase"
+                          : supabaseStatus.needAuth
+                          ? "🔐 RLS exige login: informe SUPABASE_EMAIL e SUPABASE_PASSWORD acima"
+                          : supabaseStatus.needTables
+                          ? "🟡 Conectado, mas aguardando criação das tabelas"
+                          : "🔴 Desconectado ou credenciais inválidas"}
+                      </span>
+
+                      {supabaseStatus.connected && (
+                        <div className="settings-cloud-meta">
+                          {supabaseStatus.status?.gamesSynced > 0 && (
+                            <span>
+                              🎮 <strong>{supabaseStatus.status.gamesSynced}</strong> jogos salvos
+                            </span>
+                          )}
+                          {supabaseStatus.status?.sessionsSynced > 0 && (
+                            <span>
+                              ⏱️ <strong>{supabaseStatus.status.sessionsSynced}</strong> sessões
+                              registradas
+                            </span>
+                          )}
+                          {supabaseStatus.status?.lastSyncAt && (
+                            <span>
+                              🕒 Último sync:{" "}
+                              <strong>
+                                {new Date(supabaseStatus.status.lastSyncAt).toLocaleString("pt-BR")}
+                              </strong>
+                            </span>
+                          )}
+                          <span>
+                            ⚡ <strong>Auto-sync</strong> ativo a cada jogo encerrado
+                          </span>
+                        </div>
+                      )}
+
+                      {supabaseStatus.error && (
+                        <div className="settings-cloud-error">⚠️ {supabaseStatus.error}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="settings-status-pill settings-cloud-status" style={{ opacity: 0.8 }}>
+                      <span>
+                        ☁️ Clique em "Testar Conexão" para verificar a comunicação com o Supabase.
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="settings-cloud-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={triggerSupabasePush}
+                      disabled={supabaseSyncing || !settingsForm.supabaseUrl}
+                      title="Envia todos os tempos locais para o Supabase agora"
+                    >
+                      {supabaseSyncing ? "Sincronizando..." : "☁️ Enviar para Nuvem (Push)"}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => triggerSupabasePull("merge")}
+                      disabled={supabaseSyncing || !settingsForm.supabaseUrl}
+                      title="Baixa tempos da nuvem e mescla com os locais"
+                    >
+                      📥 Restaurar da Nuvem (Pull)
+                    </button>
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={checkSupabaseStatus}
+                      disabled={supabaseLoading}
+                      title="Testa a conectividade com o Supabase"
+                    >
+                      {supabaseLoading ? "Testando..." : "⚡ Testar Conexão"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 6. Segurança & Proteção de Rede (API_TOKEN / CORS / Sub-rede) */}
+                <div className="settings-section-card">
+                  <div className="settings-section-header">
+                    <span className="settings-section-icon">🛡️</span>
+                    <div>
+                      <strong>
+                        Segurança & Controle de Acesso (API_TOKEN){" "}
+                        {settingsSecretsMeta.hasApiToken ? (
+                          <span className="settings-secret-badge configured">
+                            🔒 Protegido ({settingsSecretsMeta.apiTokenHint})
+                          </span>
+                        ) : (
+                          <span className="settings-secret-badge missing">⚠️ Sem Token</span>
+                        )}
+                      </strong>
+                      <p>
+                        Exige token de autenticação em todas as rotas de ação, restringe CORS ao
+                        endereço do front e bloqueia conexões fora da sub-rede local (
+                        <code>192.168.0.0/24</code>).
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="settings-field">
+                    <label>Trocar Token / PIN de Segurança (API_TOKEN)</label>
+                    <div className="settings-inline-input">
+                      <input
+                        type={showApiToken ? "text" : "password"}
+                        className="keyboard-input"
+                        value={settingsForm.apiToken}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({ ...prev, apiToken: e.target.value }))
+                        }
+                        placeholder={
+                          settingsSecretsMeta.hasApiToken
+                            ? `Token ativo (${settingsSecretsMeta.apiTokenHint}) — deixe em branco para manter`
+                            : "Defina um token ou PIN para proteger as rotas"
+                        }
+                        autoComplete="new-password"
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary settings-eye-btn"
+                        onClick={() => setShowApiToken((prev) => !prev)}
+                        title={showApiToken ? "Ocultar novo token" : "Mostrar novo token"}
+                      >
+                        {showApiToken ? "🙈" : "👁️"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => {
+                          triggerHaptic(20);
+                          const bytes = new Uint8Array(16);
+                          window.crypto.getRandomValues(bytes);
+                          const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+                          const generated = `gl_sec_${hex}`;
+                          setSettingsForm((prev) => ({ ...prev, apiToken: generated }));
+                          setShowApiToken(true);
+                          showToast("🎲 Novo token gerado! Clique em Salvar Configurações para aplicar.", "info");
+                        }}
+                        title="Gerar um novo token aleatório seguro"
+                      >
+                        🎲 Gerar Novo
+                      </button>
                     </div>
                   </div>
                 </div>

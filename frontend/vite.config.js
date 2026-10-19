@@ -17,14 +17,53 @@ export default defineConfig(({ mode }) => {
   const frontendPort = Number(env.VITE_PORT || env.FRONTEND_PORT || defaultPort)
   const apiPort = env.VITE_API_PORT || env.PORT
   const apiUrl = env.VITE_API_URL || (serverIp && apiPort ? `http://${serverIp}:${apiPort}` : '')
+  const apiToken = env.VITE_API_TOKEN || env.API_TOKEN || ''
+
+  const subnetPrefix =
+    serverIp && /^\d+\.\d+\.\d+\.\d+$/.test(serverIp)
+      ? serverIp.split('.').slice(0, 3).join('.') + '.'
+      : '192.168.0.'
+
+  const isAllowedIp = (rawIp = '') => {
+    const clean = String(rawIp).replace(/^::ffff:/i, '').trim()
+    if (!clean || clean === '127.0.0.1' || clean === '::1' || clean === 'localhost') return true
+    return clean.startsWith(subnetPrefix) || clean.startsWith('192.168.0.')
+  }
+
+  const subnetGuardPlugin = {
+    name: 'gamelauncher-subnet-guard',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const remote = req.socket?.remoteAddress || ''
+        if (!isAllowedIp(remote)) {
+          res.statusCode = 403
+          res.end('Acesso negado: permitido apenas na sub-rede local (192.168.0.0/24).')
+          return
+        }
+        next()
+      })
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const remote = req.socket?.remoteAddress || ''
+        if (!isAllowedIp(remote)) {
+          res.statusCode = 403
+          res.end('Acesso negado: permitido apenas na sub-rede local (192.168.0.0/24).')
+          return
+        }
+        next()
+      })
+    },
+  }
 
   return {
-    plugins: [react()],
+    plugins: [react(), subnetGuardPlugin],
     envDir: path.resolve(process.cwd(), '..'),
     define: {
       'import.meta.env.VITE_SERVER_IP': JSON.stringify(serverIp),
       'import.meta.env.VITE_API_PORT': JSON.stringify(apiPort),
       'import.meta.env.VITE_API_URL': JSON.stringify(apiUrl),
+      'import.meta.env.VITE_API_TOKEN': JSON.stringify(apiToken),
       'import.meta.env.VITE_APP_VERSION': JSON.stringify(pkg.version || '0.0.1'),
     },
     server: {

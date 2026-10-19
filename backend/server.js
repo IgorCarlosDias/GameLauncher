@@ -12,7 +12,9 @@ const { exec, execFile } = require("child_process");
 const axios = require("axios");
 
 const { getGameCover, searchGameCovers, testSteamGridDbKey } = require("./services/steamgriddb");
+const supabaseSync = require("./services/supabaseSync");
 const { dbRun, dbGet, dbAll, initDatabase } = require("./database");
+
 
 let ws = null;
 try {
@@ -37,7 +39,87 @@ function resolveShortcut(filePath) {
 
 const app = express();
 
-app.use(cors());
+// =========================
+// CONFIGURAÇÕES (via .env & Automação)
+// =========================
+
+let PORT = process.env.PORT || "3060";
+let FRONTEND_PORT = process.env.FRONTEND_PORT || "8060";
+let GAME_FOLDER = process.env.GAME_FOLDER || "";
+let SERVER_IP = process.env.SERVER_IP || "127.0.0.1";
+let API_TOKEN = (process.env.API_TOKEN || process.env.VITE_API_TOKEN || "").trim();
+
+const ROOT_ENV_PATH = path.resolve(__dirname, "../.env");
+const BACKEND_ENV_PATH = path.join(__dirname, ".env");
+const FRONTEND_ENV_PATH = path.resolve(__dirname, "../frontend/.env");
+
+// Se não houver API_TOKEN configurado, gera um token seguro automaticamente
+if (!API_TOKEN) {
+  API_TOKEN = "gl_sec_" + crypto.randomBytes(16).toString("hex");
+  process.env.API_TOKEN = API_TOKEN;
+}
+
+function getAllowedSubnetPrefix() {
+  const ip = (SERVER_IP || "192.168.0.204").trim();
+  const parts = ip.split(".");
+  if (parts.length === 4 && parts[0] !== "127") {
+    return `${parts[0]}.${parts[1]}.${parts[2]}.`;
+  }
+  return "192.168.0.";
+}
+
+function isAllowedClientIp(rawIp) {
+  if (!rawIp) return false;
+  const cleanIp = String(rawIp).replace(/^::ffff:/i, "").trim();
+  if (cleanIp === "127.0.0.1" || cleanIp === "::1" || cleanIp === "localhost") {
+    return true;
+  }
+  const subnetPrefix = getAllowedSubnetPrefix();
+  return cleanIp.startsWith(subnetPrefix) || cleanIp.startsWith("192.168.0.");
+}
+
+// 1. Filtro de Sub-rede (bloqueia qualquer IP fora de 192.168.0.0/24 e localhost)
+app.use((req, res, next) => {
+  const clientIp = req.socket?.remoteAddress || req.ip || "";
+  if (!isAllowedClientIp(clientIp)) {
+    console.warn(`[Segurança] Acesso bloqueado de IP fora da sub-rede autorizada: ${clientIp}`);
+    return res.status(403).json({
+      success: false,
+      message: "Acesso negado: dispositivo fora da sub-rede local autorizada (192.168.0.0/24).",
+    });
+  }
+  next();
+});
+
+// 2. CORS restrito exclusivamente ao endereço do Frontend
+function getAllowedOrigins() {
+  const fePort = String(FRONTEND_PORT || "8060").trim();
+  const srvIp = String(SERVER_IP || "192.168.0.204").trim();
+  return new Set([
+    `http://${srvIp}:${fePort}`,
+    `http://localhost:${fePort}`,
+    `http://127.0.0.1:${fePort}`,
+  ]);
+}
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Requisições sem header Origin (ex: imagens estáticas ou chamadas diretas locais)
+      // passam pelo CORS mas são barradas pelo requireApiToken nas rotas protegidas
+      if (!origin) return callback(null, true);
+      const allowed = getAllowedOrigins();
+      if (allowed.has(origin)) {
+        return callback(null, true);
+      }
+      console.warn(`[Segurança] Origem CORS bloqueada: ${origin}`);
+      return callback(new Error("Origem não permitida pelo CORS do GameLauncher"));
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "x-api-token", "Authorization"],
+  })
+);
+
 app.use(express.json({ limit: "10mb" }));
 
 // Rate limiters para proteção contra abuso e conformidade com CodeQL
@@ -58,6 +140,51 @@ const systemActionLimiter = rateLimit({
 
 app.use(apiLimiter);
 
+// 3. Autenticação por Token (API_TOKEN) para todas as rotas de ação e rotas sensíveis
+function verifyTokenTimingSafe(provided, expected) {
+  if (!expected) return true;
+  if (!provided || typeof provided !== "string") return false;
+  const bufA = Buffer.from(provided.trim(), "utf8");
+  const bufB = Buffer.from(expected.trim(), "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+const PROTECTED_GET_PATHS = new Set([
+  "/settings",
+  "/supabase/status",
+  "/times/export",
+]);
+
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") return next();
+
+  const isMutating = req.method !== "GET" && req.method !== "HEAD";
+  const isProtectedGet =
+    PROTECTED_GET_PATHS.has(req.path) || /^\/games\/[^/]+\/covers$/.test(req.path);
+
+  if (!isMutating && !isProtectedGet) {
+    return next();
+  }
+
+  const headerToken =
+    req.headers["x-api-token"] ||
+    (req.headers.authorization?.startsWith("Bearer ")
+      ? req.headers.authorization.slice(7)
+      : "");
+
+  if (!verifyTokenTimingSafe(headerToken, API_TOKEN)) {
+    console.warn(`[Segurança] Tentativa não autorizada em ${req.method} ${req.path} (IP: ${req.socket?.remoteAddress})`);
+    return res.status(401).json({
+      success: false,
+      code: "INVALID_API_TOKEN",
+      message: "Não autorizado: Token/PIN de segurança inválido ou ausente.",
+    });
+  }
+
+  next();
+});
+
 // Logger de requisições (ignora spam de mousemove e polling frequente no console)
 app.use((req, res, next) => {
   if (req.url !== "/system/mouse" && req.url !== "/system/active-game" && req.url !== "/system/stats") {
@@ -65,19 +192,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-
-// =========================
-// CONFIGURAÇÕES (via .env & Automação)
-// =========================
-
-let PORT = process.env.PORT || "3060";
-let FRONTEND_PORT = process.env.FRONTEND_PORT || "8060";
-let GAME_FOLDER = process.env.GAME_FOLDER || "";
-let SERVER_IP = process.env.SERVER_IP || "127.0.0.1";
-
-const ROOT_ENV_PATH = path.resolve(__dirname, "../.env");
-const BACKEND_ENV_PATH = path.join(__dirname, ".env");
-const FRONTEND_ENV_PATH = path.resolve(__dirname, "../frontend/.env");
 
 const DEFAULT_AUTOMATION_SETTINGS = {
   autoDetectGames: true,
@@ -854,7 +968,25 @@ function sanitizeEnvValue(val) {
     .trim();
 }
 
-function persistEnvFiles({ serverIp, port, frontendPort, gameFolder, steamGridDbKey }) {
+function maskSecretHint(secret) {
+  const s = String(secret || "").trim();
+  if (!s) return "";
+  if (s.length <= 4) return "••••••••";
+  return `••••••••${s.slice(-4)}`;
+}
+
+function persistEnvFiles({
+  serverIp,
+  port,
+  frontendPort,
+  gameFolder,
+  steamGridDbKey,
+  supabaseUrl,
+  supabaseKey,
+  supabaseEmail,
+  supabasePassword,
+  apiToken,
+}) {
   const cleanIp = sanitizeEnvValue(serverIp || SERVER_IP || "127.0.0.1");
   const cleanPort = String(Math.max(1, Math.min(65535, parseInt(port || PORT, 10) || 3060)));
   const cleanFrontendPort = String(
@@ -862,7 +994,30 @@ function persistEnvFiles({ serverIp, port, frontendPort, gameFolder, steamGridDb
   );
   const cleanFolder = sanitizeEnvValue(gameFolder !== undefined ? gameFolder : GAME_FOLDER);
   const cleanKey = sanitizeEnvValue(
-    steamGridDbKey !== undefined ? steamGridDbKey : process.env.STEAMGRIDDB_KEY || ""
+    steamGridDbKey !== undefined && String(steamGridDbKey).trim() !== ""
+      ? steamGridDbKey
+      : process.env.STEAMGRIDDB_KEY || ""
+  );
+  const cleanSupabaseUrl = sanitizeEnvValue(
+    supabaseUrl !== undefined ? supabaseUrl : process.env.SUPABASE_URL || ""
+  );
+  const cleanSupabaseKey = sanitizeEnvValue(
+    supabaseKey !== undefined && String(supabaseKey).trim() !== ""
+      ? supabaseKey
+      : process.env.SUPABASE_KEY || ""
+  );
+  const cleanSupabaseEmail = sanitizeEnvValue(
+    supabaseEmail !== undefined ? supabaseEmail : process.env.SUPABASE_EMAIL || ""
+  );
+  const cleanSupabasePassword = sanitizeEnvValue(
+    supabasePassword !== undefined && String(supabasePassword).trim() !== ""
+      ? supabasePassword
+      : process.env.SUPABASE_PASSWORD || ""
+  );
+  const cleanApiToken = sanitizeEnvValue(
+    apiToken !== undefined && String(apiToken).trim() !== ""
+      ? apiToken
+      : API_TOKEN || process.env.API_TOKEN || ""
   );
   const apiUrl = `http://${cleanIp}:${cleanPort}`;
 
@@ -888,6 +1043,16 @@ function persistEnvFiles({ serverIp, port, frontendPort, gameFolder, steamGridDb
     `GAME_FOLDER=${cleanFolder}`,
     `STEAMGRIDDB_KEY=${cleanKey}`,
     "",
+    "# Supabase Cloud Sync",
+    `SUPABASE_URL=${cleanSupabaseUrl}`,
+    `SUPABASE_KEY=${cleanSupabaseKey}`,
+    `SUPABASE_EMAIL=${cleanSupabaseEmail}`,
+    `SUPABASE_PASSWORD=${cleanSupabasePassword}`,
+    "",
+    "# Seguranca da API (Token exigido em todas as rotas de acao)",
+    `API_TOKEN=${cleanApiToken}`,
+    `VITE_API_TOKEN=${cleanApiToken}`,
+    "",
   ].join("\n");
 
   const backendEnvContent = [
@@ -896,6 +1061,11 @@ function persistEnvFiles({ serverIp, port, frontendPort, gameFolder, steamGridDb
     `PORT=${cleanPort}`,
     `FRONTEND_PORT=${cleanFrontendPort}`,
     `GAME_FOLDER=${cleanFolder}`,
+    `SUPABASE_URL=${cleanSupabaseUrl}`,
+    `SUPABASE_KEY=${cleanSupabaseKey}`,
+    `SUPABASE_EMAIL=${cleanSupabaseEmail}`,
+    `SUPABASE_PASSWORD=${cleanSupabasePassword}`,
+    `API_TOKEN=${cleanApiToken}`,
     "",
   ].join("\n");
 
@@ -904,6 +1074,7 @@ function persistEnvFiles({ serverIp, port, frontendPort, gameFolder, steamGridDb
     `VITE_PORT=${cleanFrontendPort}`,
     `VITE_API_PORT=${cleanPort}`,
     `VITE_API_URL=${apiUrl}`,
+    `VITE_API_TOKEN=${cleanApiToken}`,
     "",
   ].join("\n");
 
@@ -918,19 +1089,38 @@ function persistEnvFiles({ serverIp, port, frontendPort, gameFolder, steamGridDb
   process.env.FRONTEND_PORT = cleanFrontendPort;
   process.env.GAME_FOLDER = cleanFolder;
   process.env.STEAMGRIDDB_KEY = cleanKey;
+  process.env.SUPABASE_URL = cleanSupabaseUrl;
+  process.env.SUPABASE_KEY = cleanSupabaseKey;
+  process.env.SUPABASE_EMAIL = cleanSupabaseEmail;
+  process.env.SUPABASE_PASSWORD = cleanSupabasePassword;
+  process.env.API_TOKEN = cleanApiToken;
 
   SERVER_IP = cleanIp;
   PORT = cleanPort;
   FRONTEND_PORT = cleanFrontendPort;
   GAME_FOLDER = cleanFolder;
+  API_TOKEN = cleanApiToken;
+
+  if (typeof supabaseSync?.resetClient === "function") {
+    supabaseSync.resetClient();
+  }
 
   return {
     serverIp: cleanIp,
     port: Number(cleanPort),
     frontendPort: Number(cleanFrontendPort),
     gameFolder: cleanFolder,
-    steamGridDbKey: cleanKey,
+    hasSteamGridDbKey: Boolean(cleanKey),
+    steamGridDbKeyHint: maskSecretHint(cleanKey),
+    supabaseUrl: cleanSupabaseUrl,
+    hasSupabaseKey: Boolean(cleanSupabaseKey),
+    supabaseKeyHint: maskSecretHint(cleanSupabaseKey),
+    supabaseEmail: cleanSupabaseEmail,
+    hasSupabasePassword: Boolean(cleanSupabasePassword),
+    hasApiToken: Boolean(cleanApiToken),
+    apiTokenHint: maskSecretHint(cleanApiToken),
     apiUrl,
+    _internalKeyChanged: cleanKey,
   };
 }
 
@@ -1075,6 +1265,14 @@ async function savePlaytimeJson() {
     const hash = crypto.createHash("sha256").update(jsonString).digest("hex");
     await setMeta("last_json_hash", hash);
     await setMeta("last_json_sync", payload.updatedAt);
+
+    // Auto-sync em background para o Supabase (silencioso)
+    if (typeof supabaseSync?.pushPlaytimeToSupabase === "function") {
+      supabaseSync.pushPlaytimeToSupabase(payload).catch((err) => {
+        console.warn("[Supabase] Auto-sync em background:", err.message);
+      });
+    }
+
     return payload;
   } catch (err) {
     console.error("Erro salvando playtime.json:", err.message);
@@ -2104,6 +2302,8 @@ app.get("/settings", async (req, res) => {
     const folderCheck = inspectGameFolder(GAME_FOLDER);
     const networkInterfaces = getLocalNetworkAddresses();
     const steamGridDbKey = (process.env.STEAMGRIDDB_KEY || "").trim();
+    const supabaseKey = (process.env.SUPABASE_KEY || "").trim();
+    const supabasePassword = (process.env.SUPABASE_PASSWORD || "").trim();
 
     res.json({
       success: true,
@@ -2114,8 +2314,22 @@ app.get("/settings", async (req, res) => {
         apiUrl: `http://${SERVER_IP || "127.0.0.1"}:${PORT || 3060}`,
         frontendUrl: `http://${SERVER_IP || "127.0.0.1"}:${FRONTEND_PORT || 8060}`,
         gameFolder: GAME_FOLDER || "",
-        steamGridDbKey,
         hasSteamGridDbKey: Boolean(steamGridDbKey),
+        steamGridDbKeyHint: maskSecretHint(steamGridDbKey),
+        supabaseUrl: process.env.SUPABASE_URL || "",
+        hasSupabaseKey: Boolean(supabaseKey),
+        supabaseKeyHint: maskSecretHint(supabaseKey),
+        supabaseEmail: (process.env.SUPABASE_EMAIL || "").trim(),
+        hasSupabasePassword: Boolean(supabasePassword),
+        hasApiToken: Boolean(API_TOKEN),
+        apiTokenHint: maskSecretHint(API_TOKEN),
+      },
+      supabase: {
+        url: process.env.SUPABASE_URL || "",
+        hasKey: Boolean(supabaseKey),
+        email: (process.env.SUPABASE_EMAIL || "").trim(),
+        hasPassword: Boolean(supabasePassword),
+        status: typeof supabaseSync?.getSyncStatus === "function" ? supabaseSync.getSyncStatus() : null,
       },
       automation: {
         ...automationSettings,
@@ -2156,10 +2370,9 @@ app.post("/settings/validate-folder", async (req, res) => {
 
 app.post("/settings/test-steamgriddb", async (req, res) => {
   try {
-    const candidateKey =
-      req.body?.steamGridDbKey !== undefined
-        ? req.body.steamGridDbKey
-        : process.env.STEAMGRIDDB_KEY || "";
+    const rawCandidate =
+      typeof req.body?.steamGridDbKey === "string" ? req.body.steamGridDbKey.trim() : "";
+    const candidateKey = rawCandidate || process.env.STEAMGRIDDB_KEY || "";
     const result = await testSteamGridDbKey(candidateKey);
     res.json({
       success: true,
@@ -2171,6 +2384,76 @@ app.post("/settings/test-steamgriddb", async (req, res) => {
       valid: false,
       message: error.message,
     });
+  }
+});
+
+// =========================
+// SINCRONIZAÇÃO EM NUVEM (SUPABASE)
+// =========================
+
+app.get("/supabase/status", async (req, res) => {
+  try {
+    const conn = await supabaseSync.testConnection();
+    const status = supabaseSync.getSyncStatus();
+    res.json({
+      success: true,
+      configured: conn.configured,
+      connected: conn.connected,
+      authenticated: Boolean(conn.authenticated),
+      authMode: conn.authMode || status.authMode,
+      needTables: Boolean(conn.needTables),
+      needAuth: Boolean(conn.needAuth),
+      error: conn.error,
+      status,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post("/supabase/push", async (req, res) => {
+  try {
+    const payload = await buildPlaytimePayload();
+    const result = await supabaseSync.pushPlaytimeToSupabase(payload);
+    if (!result.success) {
+      return res.status(400).json({ success: false, message: result.error || result.reason });
+    }
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.post("/supabase/pull", async (req, res) => {
+  try {
+    const pullResult = await supabaseSync.pullPlaytimeFromSupabase();
+    if (!pullResult.success) {
+      return res.status(400).json({ success: false, message: pullResult.error || pullResult.reason });
+    }
+
+    const mode = req.body?.mode || "merge";
+    const imported = await importPlaytimeData(
+      {
+        games: pullResult.games,
+        sessions: pullResult.sessions,
+        summary: pullResult.summary,
+      },
+      mode,
+      { saveToJson: true }
+    );
+
+    res.json({
+      success: true,
+      stats: {
+        matchedGames: imported.matchedGamesCount,
+        updatedGames: imported.updatedGamesCount,
+        insertedGames: imported.insertedGamesCount,
+        importedSessions: imported.importedSessionsCount,
+      },
+      syncedAt: pullResult.syncedAt,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -2193,22 +2476,33 @@ app.put("/settings", async (req, res) => {
       frontendPort:
         envInput.frontendPort !== undefined ? envInput.frontendPort : FRONTEND_PORT,
       gameFolder: envInput.gameFolder !== undefined ? envInput.gameFolder : GAME_FOLDER,
-      steamGridDbKey:
-        envInput.steamGridDbKey !== undefined
-          ? envInput.steamGridDbKey
-          : process.env.STEAMGRIDDB_KEY || "",
+      steamGridDbKey: envInput.steamGridDbKey,
+      supabaseUrl:
+        envInput.supabaseUrl !== undefined
+          ? envInput.supabaseUrl
+          : process.env.SUPABASE_URL || "",
+      supabaseKey: envInput.supabaseKey,
+      supabaseEmail:
+        envInput.supabaseEmail !== undefined
+          ? envInput.supabaseEmail
+          : process.env.SUPABASE_EMAIL || "",
+      supabasePassword: envInput.supabasePassword,
+      apiToken: envInput.apiToken,
     });
+
+    const newKeyVal = savedEnv._internalKeyChanged || "";
+    delete savedEnv._internalKeyChanged;
 
     const savedAutomation = await saveAutomationSettings(autoInput);
 
     const folderChanged = savedEnv.gameFolder !== prevFolder;
-    const keyChanged = savedEnv.steamGridDbKey !== prevKey;
+    const keyChanged = newKeyVal !== prevKey;
     const networkChanged =
       savedEnv.serverIp !== prevIp ||
       String(savedEnv.port) !== prevPort ||
       String(savedEnv.frontendPort) !== prevFrontendPort;
 
-    if (folderChanged || (keyChanged && savedEnv.steamGridDbKey)) {
+    if (folderChanged || (keyChanged && newKeyVal)) {
       await loadGames();
     }
 
@@ -2220,12 +2514,11 @@ app.put("/settings", async (req, res) => {
         ? "Configurações salvas! Como IP/Porta foram alterados, reinicie o GameLauncher se mudar de endereço."
         : "Configurações da automação e variáveis salvas e aplicadas em tempo real!",
       requiresRestart: networkChanged,
-      reloadedLibrary: folderChanged || (keyChanged && Boolean(savedEnv.steamGridDbKey)),
+      reloadedLibrary: folderChanged || (keyChanged && Boolean(newKeyVal)),
       totalGames: games.length,
       env: {
         ...savedEnv,
         frontendUrl: `http://${savedEnv.serverIp}:${savedEnv.frontendPort}`,
-        hasSteamGridDbKey: Boolean(savedEnv.steamGridDbKey),
       },
       automation: savedAutomation,
       folderStatus,
