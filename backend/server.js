@@ -759,27 +759,46 @@ function parseHumanDuration(val) {
     return Math.max(0, Math.round(val));
   }
   if (typeof val !== "string") return null;
-  const trimmed = val.trim();
+  const trimmed = val.trim().slice(0, 64).toLowerCase();
   if (!trimmed) return null;
-  if (/^-?\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+
+  const directNum = Number(trimmed);
+  if (Number.isInteger(directNum) && !trimmed.includes(" ")) {
+    return Math.max(0, directNum);
+  }
 
   let total = 0;
   let matched = false;
-  const hrs = trimmed.match(/(\d+(?:[.,]\d+)?)\s*h/i);
-  const mins = trimmed.match(/(\d+(?:[.,]\d+)?)\s*m(?!s)/i);
-  const secs = trimmed.match(/(\d+(?:[.,]\d+)?)\s*s/i);
-  if (hrs) {
-    total += Math.round(parseFloat(hrs[1].replace(",", ".")) * 3600);
-    matched = true;
+  let numBuf = "";
+  const len = trimmed.length;
+
+  for (let i = 0; i < len; i++) {
+    const ch = trimmed[i];
+    if ((ch >= "0" && ch <= "9") || ch === "." || ch === ",") {
+      numBuf += ch === "," ? "." : ch;
+      continue;
+    }
+    if (ch === " ") {
+      continue;
+    }
+    if (numBuf) {
+      const parsed = parseFloat(numBuf);
+      numBuf = "";
+      if (Number.isFinite(parsed)) {
+        if (ch === "h") {
+          total += Math.round(parsed * 3600);
+          matched = true;
+        } else if (ch === "m" && trimmed[i + 1] !== "s") {
+          total += Math.round(parsed * 60);
+          matched = true;
+        } else if (ch === "s") {
+          total += Math.round(parsed);
+          matched = true;
+        }
+      }
+    }
   }
-  if (mins) {
-    total += Math.round(parseFloat(mins[1].replace(",", ".")) * 60);
-    matched = true;
-  }
-  if (secs) {
-    total += Math.round(parseFloat(secs[1].replace(",", ".")));
-    matched = true;
-  }
+
   return matched ? Math.max(0, total) : null;
 }
 
