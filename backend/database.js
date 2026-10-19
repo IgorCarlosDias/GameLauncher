@@ -80,6 +80,13 @@ async function initDatabase() {
       duration INTEGER
     )
   `);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    )
+  `);
 }
 
 module.exports = {

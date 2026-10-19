@@ -4,7 +4,7 @@ import axios from "axios";
 const SERVER_IP = import.meta.env.VITE_SERVER_IP || (typeof window !== "undefined" ? window.location.hostname : "localhost");
 const API_PORT = import.meta.env.VITE_API_PORT || "3060";
 const API = import.meta.env.VITE_API_URL || `http://${SERVER_IP}:${API_PORT}`;
-const APP_VERSION = import.meta.env.VITE_APP_VERSION || "0.0.2";
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || "1.0.0";
 
 // Haptic feedback helper for mobile touch devices
 function triggerHaptic(ms = 22) {
@@ -86,12 +86,46 @@ export default function App() {
   // Edit Game / Cover Modal states
   const [editingGame, setEditingGame] = useState(null);
   const [editName, setEditName] = useState("");
+  const [editPlayTime, setEditPlayTime] = useState("");
   const [coverQuery, setCoverQuery] = useState("");
   const [coverResults, setCoverResults] = useState([]);
   const [loadingCovers, setLoadingCovers] = useState(false);
   const [customCoverUrl, setCustomCoverUrl] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Times & JSON Import/Export states
+  const [timeSummary, setTimeSummary] = useState(null);
+  const [recentSessions, setRecentSessions] = useState([]);
+  const [timesModalOpen, setTimesModalOpen] = useState(false);
+  const [importMode, setImportMode] = useState("merge"); // 'merge' | 'replace'
+  const [importingTimes, setImportingTimes] = useState(false);
+  const [exportingTimes, setExportingTimes] = useState(false);
+
+  // Automation & System Settings states
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [folderValidation, setFolderValidation] = useState(null);
+  const [validatingFolder, setValidatingFolder] = useState(false);
+  const [apiKeyTestResult, setApiKeyTestResult] = useState(null);
+  const [testingApiKey, setTestingApiKey] = useState(false);
+  const [networkInterfaces, setNetworkInterfaces] = useState([]);
+  const [settingsForm, setSettingsForm] = useState({
+    serverIp: SERVER_IP,
+    port: Number(API_PORT) || 3060,
+    frontendPort: 8060,
+    gameFolder: "",
+    steamGridDbKey: "",
+    autoDetectGames: true,
+    monitorIntervalSec: 8,
+    shutdownTimerSec: 30,
+    defaultCloseMode: "force",
+    touchpadSensitivity: 2.1,
+    volumeStep: 3,
+  });
+
+  const fileInputRef = useRef(null);
   const toastTimerRef = useRef(null);
   const volumeTimerRef = useRef(null);
   const lastVolumeTouchRef = useRef(0);
@@ -123,11 +157,159 @@ export default function App() {
     }, 2800);
   };
 
+  // Carregar configurações do servidor (.env + automação)
+  async function loadSettings(openModal = false) {
+    if (openModal) {
+      triggerHaptic(25);
+      setSettingsModalOpen(true);
+      setApiKeyTestResult(null);
+      setSettingsLoading(true);
+    }
+    try {
+      const res = await axios.get(`${API}/settings`);
+      if (res.data?.success) {
+        const env = res.data.env || {};
+        const auto = res.data.automation || {};
+        setSettingsForm({
+          serverIp: env.serverIp || SERVER_IP,
+          port: env.port || Number(API_PORT) || 3060,
+          frontendPort: env.frontendPort || 8060,
+          gameFolder: env.gameFolder || "",
+          steamGridDbKey: env.steamGridDbKey || "",
+          autoDetectGames: auto.autoDetectGames !== undefined ? Boolean(auto.autoDetectGames) : true,
+          monitorIntervalSec: Number(auto.monitorIntervalSec) || 8,
+          shutdownTimerSec: Number(auto.shutdownTimerSec) || 30,
+          defaultCloseMode: auto.defaultCloseMode || "force",
+          touchpadSensitivity: Number(auto.touchpadSensitivity) || 2.1,
+          volumeStep: Number(auto.volumeStep) || 3,
+        });
+        if (res.data.folderStatus) {
+          setFolderValidation(res.data.folderStatus);
+        }
+        if (Array.isArray(res.data.networkInterfaces)) {
+          setNetworkInterfaces(res.data.networkInterfaces);
+        }
+      }
+    } catch (err) {
+      console.error("Erro carregando configurações:", err);
+      if (openModal) {
+        showToast("Falha ao carregar configurações do servidor", "error");
+      }
+    } finally {
+      setSettingsLoading(false);
+    }
+  }
+
+  // Validar pasta de jogos informada
+  async function validateGameFolderInput(customPath) {
+    triggerHaptic(20);
+    setValidatingFolder(true);
+    try {
+      const folderToTest = customPath !== undefined ? customPath : settingsForm.gameFolder;
+      const res = await axios.post(`${API}/settings/validate-folder`, {
+        gameFolder: folderToTest,
+      });
+      setFolderValidation(res.data);
+      if (res.data?.valid) {
+        showToast(`📁 ${res.data.message}`, "success");
+      } else {
+        showToast(res.data?.message || "Pasta inválida", "warning");
+      }
+    } catch (err) {
+      showToast(err.response?.data?.message || "Erro ao validar diretório", "error");
+    } finally {
+      setValidatingFolder(false);
+    }
+  }
+
+  // Testar chave da API SteamGridDB
+  async function testSteamGridDbKeyInput() {
+    triggerHaptic(25);
+    setTestingApiKey(true);
+    setApiKeyTestResult(null);
+    try {
+      const res = await axios.post(`${API}/settings/test-steamgriddb`, {
+        steamGridDbKey: settingsForm.steamGridDbKey,
+      });
+      setApiKeyTestResult(res.data);
+      if (res.data?.valid) {
+        showToast("🔑 Chave SteamGridDB válida e funcionando!", "success");
+      } else {
+        showToast(res.data?.message || "Chave SteamGridDB inválida", "error");
+      }
+    } catch (err) {
+      const msg = err.response?.data?.message || "Erro ao testar chave SteamGridDB";
+      setApiKeyTestResult({ valid: false, message: msg });
+      showToast(msg, "error");
+    } finally {
+      setTestingApiKey(false);
+    }
+  }
+
+  // Salvar configurações (.env + automação)
+  async function saveAllSettings(e) {
+    if (e) e.preventDefault();
+    triggerHaptic(35);
+    setSettingsSaving(true);
+    try {
+      const res = await axios.put(`${API}/settings`, {
+        env: {
+          serverIp: String(settingsForm.serverIp || "").trim(),
+          port: Number(settingsForm.port) || 3060,
+          frontendPort: Number(settingsForm.frontendPort) || 8060,
+          gameFolder: String(settingsForm.gameFolder || "").trim(),
+          steamGridDbKey: String(settingsForm.steamGridDbKey || "").trim(),
+        },
+        automation: {
+          autoDetectGames: Boolean(settingsForm.autoDetectGames),
+          monitorIntervalSec: Number(settingsForm.monitorIntervalSec) || 8,
+          shutdownTimerSec: Number(settingsForm.shutdownTimerSec) || 30,
+          defaultCloseMode: settingsForm.defaultCloseMode === "soft" ? "soft" : "force",
+          touchpadSensitivity: Number(settingsForm.touchpadSensitivity) || 2.1,
+          volumeStep: Number(settingsForm.volumeStep) || 3,
+        },
+      });
+
+      if (res.data?.success) {
+        if (res.data.folderStatus) setFolderValidation(res.data.folderStatus);
+        if (Array.isArray(res.data.networkInterfaces)) {
+          setNetworkInterfaces(res.data.networkInterfaces);
+        }
+        await loadGames(false);
+        showToast(res.data.message || "✅ Configurações salvas com sucesso!", "success");
+        setSettingsModalOpen(false);
+      }
+    } catch (err) {
+      console.error("Erro salvando configurações:", err);
+      showToast(err.response?.data?.message || "Erro ao salvar configurações", "error");
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
+  // Carregar resumo de tempos e sessões do JSON/SQLite
+  async function loadTimeSummary() {
+    try {
+      const res = await axios.get(`${API}/times`);
+      if (res.data?.summary) {
+        setTimeSummary(res.data.summary);
+      }
+      if (Array.isArray(res.data?.recentSessions)) {
+        setRecentSessions(res.data.recentSessions);
+      }
+    } catch {
+      // Ignora erro silencioso
+    }
+  }
+
   // Carregar lista de jogos
   async function loadGames(showToastNotice = false) {
     try {
       setError("");
-      const response = await axios.get(`${API}/games`);
+      const [response] = await Promise.all([
+        axios.get(`${API}/games`),
+        loadTimeSummary(),
+      ]);
       setGames(response.data);
       if (showToastNotice) {
         showToast(`Biblioteca sincronizada: ${response.data.length} jogos`, "success");
@@ -138,6 +320,95 @@ export default function App() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  }
+
+  // Exportar JSON de tempos (jogos, sofá e sessões)
+  async function exportTimesJson() {
+    triggerHaptic(30);
+    setExportingTimes(true);
+    try {
+      const res = await axios.get(`${API}/times/export`);
+      const data = res.data;
+      const jsonStr = JSON.stringify(data, null, 2);
+      const blob = new Blob([jsonStr], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const dateStamp = new Date().toISOString().slice(0, 10);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `gamelauncher-tempos-${dateStamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      if (data?.summary) setTimeSummary(data.summary);
+      if (Array.isArray(data?.sessions)) {
+        setRecentSessions([...data.sessions].slice(-30).reverse());
+      }
+      showToast("📤 JSON de tempos exportado com sucesso!", "success");
+    } catch (err) {
+      console.error("Erro exportando JSON:", err);
+      showToast("Falha ao exportar JSON de tempos", "error");
+    } finally {
+      setExportingTimes(false);
+    }
+  }
+
+  // Importar JSON de tempos selecionado pelo usuário
+  async function handleImportFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    triggerHaptic(35);
+    setImportingTimes(true);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const res = await axios.post(`${API}/times/import`, {
+        data: parsed,
+        mode: importMode,
+      });
+      if (res.data?.success) {
+        if (res.data.summary) setTimeSummary(res.data.summary);
+        if (Array.isArray(res.data.recentSessions)) setRecentSessions(res.data.recentSessions);
+        await loadGames(false);
+        const st = res.data.stats || {};
+        showToast(
+          `📥 Importado! ${st.updatedGames || 0} jogos e ${st.importedSessions || 0} sessões sincronizados.`,
+          "success"
+        );
+      }
+    } catch (err) {
+      console.error("Erro importando JSON:", err);
+      const msg =
+        err.response?.data?.message ||
+        (err instanceof SyntaxError ? "Arquivo JSON malformado ou inválido" : "Falha ao importar JSON");
+      showToast(msg, "error");
+    } finally {
+      setImportingTimes(false);
+    }
+  }
+
+  // Recarregar tempos diretamente do arquivo backend/playtime.json no servidor
+  async function reloadLocalTimesJson() {
+    triggerHaptic(35);
+    setImportingTimes(true);
+    try {
+      const res = await axios.post(`${API}/times/reload-local`, {
+        mode: importMode,
+      });
+      if (res.data?.success) {
+        if (res.data.summary) setTimeSummary(res.data.summary);
+        if (Array.isArray(res.data.recentSessions)) setRecentSessions(res.data.recentSessions);
+        await loadGames(false);
+        showToast("🔄 Tempos recarregados de backend/playtime.json!", "success");
+      }
+    } catch (err) {
+      console.error("Erro recarregando JSON local:", err);
+      showToast(err.response?.data?.message || "Falha ao ler playtime.json local", "error");
+    } finally {
+      setImportingTimes(false);
     }
   }
 
@@ -239,6 +510,7 @@ export default function App() {
     triggerHaptic(25);
     setEditingGame(game);
     setEditName(game.name);
+    setEditPlayTime(formatPlayTime(game.playTime) || (game.playTime ? `${game.playTime}s` : "0m"));
     setCoverQuery(game.name);
     setCustomCoverUrl("");
     setCoverResults([]);
@@ -269,6 +541,7 @@ export default function App() {
       const res = await axios.put(`${API}/games/${editingGame.id}`, {
         customName: editName.trim(),
         coverUrl: coverToSave,
+        playTime: editPlayTime.trim(),
       });
       if (res.data?.success) {
         showToast("✅ Jogo atualizado com sucesso!", "success");
@@ -635,8 +908,9 @@ export default function App() {
     const t = e.touches[0];
     recordTrailPoint(t.clientX, t.clientY, false);
 
-    const dx = (t.clientX - touchStateRef.current.lastX) * 2.1; // Sensibilidade fluida para TV
-    const dy = (t.clientY - touchStateRef.current.lastY) * 2.1;
+    const sens = Number(settingsForm.touchpadSensitivity) || 2.1;
+    const dx = (t.clientX - touchStateRef.current.lastX) * sens;
+    const dy = (t.clientY - touchStateRef.current.lastY) * sens;
     touchStateRef.current.lastX = t.clientX;
     touchStateRef.current.lastY = t.clientY;
 
@@ -683,8 +957,9 @@ export default function App() {
   function handleMouseMoveTouchpad(e) {
     if (!touchStateRef.current.mouseDown) return;
     recordTrailPoint(e.clientX, e.clientY, false);
-    const dx = (e.clientX - touchStateRef.current.lastX) * 2.1;
-    const dy = (e.clientY - touchStateRef.current.lastY) * 2.1;
+    const sens = Number(settingsForm.touchpadSensitivity) || 2.1;
+    const dx = (e.clientX - touchStateRef.current.lastX) * sens;
+    const dy = (e.clientY - touchStateRef.current.lastY) * sens;
     touchStateRef.current.lastX = e.clientX;
     touchStateRef.current.lastY = e.clientY;
     if (Math.abs(dx) > 1.2 || Math.abs(dy) > 1.2) {
@@ -735,12 +1010,13 @@ export default function App() {
     triggerHaptic(50);
     setPowerModal(null);
     try {
-      await axios.post(`${API}/system/power`, { action });
+      const res = await axios.post(`${API}/system/power`, { action });
+      const timerSec = res.data?.timerSec || settingsForm.shutdownTimerSec || 30;
       if (action === "sleep") {
         showToast("💤 PC entrando em modo de suspensão...", "info");
       } else if (action === "shutdown") {
         setShutdownScheduled(true);
-        showToast("🛑 PC será desligado em 30 segundos!", "warning");
+        showToast(`🛑 PC será desligado em ${timerSec} segundos!`, "warning");
       } else if (action === "cancel") {
         setShutdownScheduled(false);
         showToast("✅ Desligamento cancelado!", "success");
@@ -752,6 +1028,7 @@ export default function App() {
 
   // Inicialização
   useEffect(() => {
+    loadSettings(false);
     loadGames();
     checkActiveGame();
 
@@ -842,20 +1119,23 @@ export default function App() {
       .slice(0, 6);
   }, [games]);
 
-  // Estatísticas gerais da biblioteca do jogador
+  // Estatísticas gerais da biblioteca do jogador (inclui Tempo de Sofá sincronizado com JSON)
   const libraryStats = useMemo(() => {
-    const totalPlayTimeSec = games.reduce((acc, g) => acc + (Number(g.playTime) || 0), 0);
+    const gamesPlayTimeSec = games.reduce((acc, g) => acc + (Number(g.playTime) || 0), 0);
+    const offsetSec = Number(timeSummary?.couchTimeOffsetSeconds) || 0;
+    const totalPlayTimeSec = Math.max(0, gamesPlayTimeSec + offsetSec);
     const topGame = [...games]
       .filter((g) => (g.playTime || 0) > 0 || (g.playCount || 0) > 0)
       .sort((a, b) => (b.playTime || 0) - (a.playTime || 0))[0] || null;
 
     return {
       totalGames: games.length,
+      totalPlayTimeSec,
       totalPlayTimeLabel: formatPlayTime(totalPlayTimeSec) || "0m",
       topGame,
       favCount: games.filter((g) => g.favorite).length,
     };
-  }, [games]);
+  }, [games, timeSummary]);
 
   // Ranking de tempo de jogo para o menu lateral (calculado apenas com o menu aberto).
   // O jogo em execução soma a sessão atual ao total acumulado.
@@ -876,7 +1156,8 @@ export default function App() {
       .sort((a, b) => a.name.localeCompare(b.name));
 
     const maxTotal = played[0]?.total || 1;
-    const totalSec = played.reduce((acc, i) => acc + i.total, 0);
+    const offsetSec = Number(timeSummary?.couchTimeOffsetSeconds) || 0;
+    const totalSec = Math.max(0, played.reduce((acc, i) => acc + i.total, 0) + offsetSec);
 
     return {
       played: played.map((i) => ({
@@ -887,7 +1168,7 @@ export default function App() {
       unplayed,
       totalLabel: formatPlayTimeDetailed(totalSec),
     };
-  }, [games, menuOpen, activeGame, activeGames]);
+  }, [games, menuOpen, activeGame, activeGames, timeSummary]);
 
   // Jogo em Destaque (Hero Banner): Jogo ativo, ou mais recente, ou favorito, ou o primeiro
   const heroGame = useMemo(() => {
@@ -1025,7 +1306,7 @@ export default function App() {
               <div className="brand-text">
                 <h1>GameLauncher</h1>
                 <span className="online-badge">
-                  <span className="badge-dot"></span> Online • {SERVER_IP}
+                  <span className="badge-dot"></span> Online • {settingsForm.serverIp || SERVER_IP}
                 </span>
               </div>
             </div>
@@ -1041,6 +1322,15 @@ export default function App() {
               aria-label="Abrir Controle Remoto"
             >
               🕹️ <span className="btn-label">Controle</span>
+            </button>
+
+            <button
+              className={`btn btn-refresh ${settingsModalOpen ? "active" : ""}`}
+              onClick={() => loadSettings(true)}
+              aria-label="Configurações da Automação e Sistema"
+              title="Configurações da Automação (IP, Variáveis, API Keys)"
+            >
+              ⚙️
             </button>
 
             <button
@@ -1262,11 +1552,19 @@ export default function App() {
               </div>
             </div>
 
-            <div className="profile-stat-card">
+            <div
+              className="profile-stat-card clickable"
+              onClick={() => {
+                triggerHaptic(25);
+                loadTimeSummary();
+                setTimesModalOpen(true);
+              }}
+              title="Clique para gerenciar tempos e exportar/importar JSON"
+            >
               <span className="profile-stat-icon">⏱️</span>
               <div className="profile-stat-text">
                 <strong className="profile-stat-number">{libraryStats.totalPlayTimeLabel}</strong>
-                <span className="profile-stat-sub">Tempo Total no Sofá</span>
+                <span className="profile-stat-sub">Tempo Total no Sofá • JSON</span>
               </div>
             </div>
 
@@ -2016,6 +2314,15 @@ export default function App() {
         </div>
       )}
 
+      {/* Input oculto para seleção de arquivo JSON na importação */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json,application/json"
+        style={{ display: "none" }}
+        onChange={handleImportFileSelect}
+      />
+
       {/* Modal de Edição de Jogo e Escolha de Capa (SteamGridDB Gallery) */}
       {editingGame && (
         <div className="modal-backdrop" onClick={() => setEditingGame(null)}>
@@ -2027,15 +2334,28 @@ export default function App() {
               </button>
             </div>
 
-            <div className="edit-form-group">
-              <label>Nome de Exibição</label>
-              <input
-                type="text"
-                className="search-input compact"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                placeholder={editingGame.originalName}
-              />
+            <div className="edit-form-row">
+              <div className="edit-form-group">
+                <label>Nome de Exibição</label>
+                <input
+                  type="text"
+                  className="search-input compact"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder={editingGame.originalName}
+                />
+              </div>
+
+              <div className="edit-form-group">
+                <label>Tempo Jogado (ex: 12h 30m)</label>
+                <input
+                  type="text"
+                  className="search-input compact"
+                  value={editPlayTime}
+                  onChange={(e) => setEditPlayTime(e.target.value)}
+                  placeholder="Ex: 5h 30m ou 0m"
+                />
+              </div>
             </div>
 
             <div className="edit-form-group">
@@ -2108,6 +2428,564 @@ export default function App() {
         </div>
       )}
 
+      {/* Modal de Gerenciamento de Tempos & Exportar / Importar JSON */}
+      {timesModalOpen && (
+        <div className="modal-backdrop" onClick={() => setTimesModalOpen(false)}>
+          <div className="modal-dialog modal-large times-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="remote-header">
+              <h3>⏱️ Tempos de Jogo, Sofá & Backup JSON</h3>
+              <button className="remote-close-btn" onClick={() => setTimesModalOpen(false)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="times-json-path-banner">
+              <span className="times-json-dot" />
+              <span>
+                Gravação automática ativa em <code>backend/playtime.json</code>
+              </span>
+            </div>
+
+            <div className="times-summary-grid">
+              <div className="times-stat-box highlight">
+                <span className="times-stat-label">🛋️ Tempo Total no Sofá</span>
+                <strong className="times-stat-value">
+                  {timeSummary?.couchTimeFormatted || libraryStats.totalPlayTimeLabel}
+                </strong>
+                <span className="times-stat-sub">
+                  {timeSummary?.couchTimeSeconds ?? libraryStats.totalPlayTimeSec ?? 0}s acumulados
+                </span>
+              </div>
+
+              <div className="times-stat-box">
+                <span className="times-stat-label">🎮 Tempo em Jogos</span>
+                <strong className="times-stat-value">
+                  {timeSummary?.gamesPlayTimeFormatted || libraryStats.totalPlayTimeLabel}
+                </strong>
+                <span className="times-stat-sub">
+                  {timeSummary?.playedGamesCount ?? games.filter((g) => g.playTime > 0).length} de{" "}
+                  {timeSummary?.totalGames ?? games.length} jogos jogados
+                </span>
+              </div>
+
+              <div className="times-stat-box">
+                <span className="times-stat-label">📊 Sessões & Partidas</span>
+                <strong className="times-stat-value">
+                  {timeSummary?.totalSessionsRecorded ?? recentSessions.length} sessões
+                </strong>
+                <span className="times-stat-sub">
+                  {timeSummary?.totalPlayCount ?? 0} aberturas •{" "}
+                  {timeSummary?.sessionsTotalDurationFormatted || "0m"} registrados
+                </span>
+              </div>
+
+              <div className="times-stat-box">
+                <span className="times-stat-label">🗓️ Última Atividade</span>
+                <strong className="times-stat-value small">
+                  {timeSummary?.lastPlayedGame?.name || libraryStats.topGame?.name || "—"}
+                </strong>
+                <span className="times-stat-sub">
+                  {timeSummary?.lastPlayedAt
+                    ? new Date(timeSummary.lastPlayedAt).toLocaleString("pt-BR")
+                    : "Sem registro recente"}
+                </span>
+              </div>
+            </div>
+
+            {/* Exportar e Importar JSON */}
+            <div className="times-actions-card">
+              <div className="times-actions-header">
+                <strong>📦 Exportar ou Importar Dados (.json)</strong>
+                <p>
+                  Exporte seus tempos de jogos, tempo de sofá e histórico de sessões para um arquivo{" "}
+                  <code>.json</code> ou importe um backup existente.
+                </p>
+              </div>
+
+              <div className="times-mode-selector">
+                <span className="times-mode-label">Modo de Importação:</span>
+                <div className="side-menu-segment">
+                  <button
+                    type="button"
+                    className={`side-menu-segment-btn ${importMode === "merge" ? "active" : ""}`}
+                    onClick={() => {
+                      triggerHaptic(15);
+                      setImportMode("merge");
+                    }}
+                    title="Mantém os maiores tempos de jogo e soma novas sessões sem apagar dados"
+                  >
+                    🔄 Mesclar (Manter Maiores)
+                  </button>
+                  <button
+                    type="button"
+                    className={`side-menu-segment-btn ${importMode === "replace" ? "active" : ""}`}
+                    onClick={() => {
+                      triggerHaptic(15);
+                      setImportMode("replace");
+                    }}
+                    title="Substitui os tempos pelos valores exatos definidos no arquivo JSON"
+                  >
+                    ⚡ Substituir pelos do JSON
+                  </button>
+                </div>
+              </div>
+
+              <div className="times-btn-grid">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={exportTimesJson}
+                  disabled={exportingTimes}
+                >
+                  {exportingTimes ? "Exportando..." : "📤 Exportar JSON"}
+                </button>
+
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={importingTimes}
+                >
+                  {importingTimes ? "Importando..." : "📥 Importar Arquivo .json"}
+                </button>
+
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={reloadLocalTimesJson}
+                  disabled={importingTimes}
+                  title="Lê e aplica novamente o arquivo backend/playtime.json salvo no servidor"
+                >
+                  🔄 Ler JSON do Servidor
+                </button>
+              </div>
+            </div>
+
+            {/* Histórico Recente de Sessões (Outros Tempos) */}
+            {recentSessions.length > 0 && (
+              <div className="times-sessions-section">
+                <div className="side-menu-title-row">
+                  <span className="side-menu-title">Histórico Recente de Sessões</span>
+                  <span className="side-menu-title-total">
+                    Últimas {Math.min(recentSessions.length, 15)} partidas
+                  </span>
+                </div>
+                <ul className="times-sessions-list">
+                  {recentSessions.slice(0, 15).map((s, idx) => (
+                    <li key={s.id || idx} className="times-session-row">
+                      <div className="times-session-main">
+                        <strong>{s.gameName || `Jogo #${s.gameId}`}</strong>
+                        <span>
+                          {s.endedAt
+                            ? new Date(s.endedAt).toLocaleString("pt-BR")
+                            : s.startedAt
+                            ? new Date(s.startedAt).toLocaleString("pt-BR")
+                            : "—"}
+                        </span>
+                      </div>
+                      <span className="times-session-duration">
+                        ⏱️ {s.durationFormatted || formatPlayTimeDetailed(s.duration)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button className="btn btn-secondary" onClick={() => setTimesModalOpen(false)}>
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Configurações da Automação & Sistema (.env + Variáveis + API Keys) */}
+      {settingsModalOpen && (
+        <div className="modal-backdrop" onClick={() => setSettingsModalOpen(false)}>
+          <div
+            className="modal-dialog modal-large settings-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="remote-header">
+              <h3>⚙️ Configurações da Automação & Sistema</h3>
+              <button className="remote-close-btn" onClick={() => setSettingsModalOpen(false)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="times-json-path-banner">
+              <span className="times-json-dot" />
+              <span>
+                Sincronizado com <code>.env</code>, <code>backend/.env</code>,{" "}
+                <code>frontend/.env</code> e <code>SQLite</code>
+              </span>
+            </div>
+
+            {settingsLoading ? (
+              <div className="loading-state" style={{ padding: "32px 0" }}>
+                <div className="spinner"></div>
+                <p>Carregando variáveis e configurações...</p>
+              </div>
+            ) : (
+              <form className="settings-form" onSubmit={saveAllSettings}>
+                {/* 1. Rede & Endereçamento */}
+                <div className="settings-section-card">
+                  <div className="settings-section-header">
+                    <span className="settings-section-icon">🌐</span>
+                    <div>
+                      <strong>Rede & Endereçamento (.env)</strong>
+                      <p>Defina o IP local do PC e as portas da API e da interface web.</p>
+                    </div>
+                  </div>
+
+                  <div className="settings-grid-3">
+                    <div className="settings-field">
+                      <label>SERVER_IP (IP do PC na Rede)</label>
+                      <input
+                        type="text"
+                        className="keyboard-input"
+                        value={settingsForm.serverIp}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({ ...prev, serverIp: e.target.value }))
+                        }
+                        placeholder="Ex: 192.168.0.204"
+                      />
+                    </div>
+
+                    <div className="settings-field">
+                      <label>PORT (Porta da API Backend)</label>
+                      <input
+                        type="number"
+                        className="keyboard-input"
+                        min="1"
+                        max="65535"
+                        value={settingsForm.port}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({ ...prev, port: e.target.value }))
+                        }
+                      />
+                    </div>
+
+                    <div className="settings-field">
+                      <label>FRONTEND_PORT (Porta Web)</label>
+                      <input
+                        type="number"
+                        className="keyboard-input"
+                        min="1"
+                        max="65535"
+                        value={settingsForm.frontendPort}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({
+                            ...prev,
+                            frontendPort: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  {networkInterfaces.length > 0 && (
+                    <div className="settings-ip-chips-row">
+                      <span className="settings-chip-label">IPs detectados neste PC:</span>
+                      <div className="settings-ip-chips">
+                        {networkInterfaces.map((iface) => (
+                          <button
+                            key={`${iface.name}-${iface.address}`}
+                            type="button"
+                            className={`settings-ip-chip ${
+                              settingsForm.serverIp === iface.address ? "active" : ""
+                            }`}
+                            onClick={() => {
+                              triggerHaptic(15);
+                              setSettingsForm((prev) => ({
+                                ...prev,
+                                serverIp: iface.address,
+                              }));
+                            }}
+                            title={`Usar IP da placa ${iface.name}`}
+                          >
+                            📡 {iface.address} <small>({iface.name})</small>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. Diretório de Jogos */}
+                <div className="settings-section-card">
+                  <div className="settings-section-header">
+                    <span className="settings-section-icon">📁</span>
+                    <div>
+                      <strong>Diretório da Biblioteca (GAME_FOLDER)</strong>
+                      <p>
+                        Caminho da pasta onde estão seus atalhos (<code>.lnk</code>,{" "}
+                        <code>.url</code>) e executáveis (<code>.exe</code>).
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="settings-inline-input">
+                    <input
+                      type="text"
+                      className="keyboard-input"
+                      value={settingsForm.gameFolder}
+                      onChange={(e) =>
+                        setSettingsForm((prev) => ({ ...prev, gameFolder: e.target.value }))
+                      }
+                      placeholder="Ex: C:\Users\igorc\OneDrive\Documentos\Jogos"
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => validateGameFolderInput()}
+                      disabled={validatingFolder}
+                    >
+                      {validatingFolder ? "Validando..." : "🔍 Validar Pasta"}
+                    </button>
+                  </div>
+
+                  {folderValidation && (
+                    <div
+                      className={`settings-status-pill ${
+                        folderValidation.valid ? "valid" : "invalid"
+                      }`}
+                    >
+                      <span>{folderValidation.valid ? "✅" : "⚠️"}</span>
+                      <div>
+                        <strong>{folderValidation.message}</strong>
+                        {folderValidation.valid && folderValidation.counts && (
+                          <span className="settings-status-sub">
+                            {" "}
+                            ({folderValidation.counts.lnk || 0} .lnk •{" "}
+                            {folderValidation.counts.url || 0} .url •{" "}
+                            {folderValidation.counts.exe || 0} .exe)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. API Keys & Integrações */}
+                <div className="settings-section-card">
+                  <div className="settings-section-header">
+                    <span className="settings-section-icon">🔑</span>
+                    <div>
+                      <strong>Integrações & API Keys (STEAMGRIDDB_KEY)</strong>
+                      <p>
+                        Chave usada para baixar automaticamente as capas verticais dos jogos no
+                        SteamGridDB.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="settings-inline-input">
+                    <input
+                      type={showApiKey ? "text" : "password"}
+                      className="keyboard-input"
+                      value={settingsForm.steamGridDbKey}
+                      onChange={(e) =>
+                        setSettingsForm((prev) => ({
+                          ...prev,
+                          steamGridDbKey: e.target.value,
+                        }))
+                      }
+                      placeholder="Cole aqui sua API Key do SteamGridDB"
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setShowApiKey((prev) => !prev)}
+                      title={showApiKey ? "Ocultar chave" : "Mostrar chave"}
+                    >
+                      {showApiKey ? "🙈" : "👁️"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={testSteamGridDbKeyInput}
+                      disabled={testingApiKey}
+                    >
+                      {testingApiKey ? "Testando..." : "⚡ Testar Chave"}
+                    </button>
+                  </div>
+
+                  {apiKeyTestResult && (
+                    <div
+                      className={`settings-status-pill ${
+                        apiKeyTestResult.valid ? "valid" : "invalid"
+                      }`}
+                    >
+                      <span>{apiKeyTestResult.valid ? "✅" : "❌"}</span>
+                      <strong>{apiKeyTestResult.message}</strong>
+                    </div>
+                  )}
+                </div>
+
+                {/* 4. Automação & Comportamento do Sistema */}
+                <div className="settings-section-card">
+                  <div className="settings-section-header">
+                    <span className="settings-section-icon">🤖</span>
+                    <div>
+                      <strong>Automação & Controle Remoto</strong>
+                      <p>
+                        Ajuste o monitoramento automático de processos, sensibilidade do Touchpad e
+                        comportamento de energia.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="settings-toggle-row">
+                    <div>
+                      <strong>Detecção Automática de Jogos Abertos no PC</strong>
+                      <p>
+                        Detecta e contabiliza automaticamente o tempo de jogos abertos fora do
+                        GameLauncher (via Steam ou executável).
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className={`settings-switch-btn ${
+                        settingsForm.autoDetectGames ? "on" : "off"
+                      }`}
+                      onClick={() => {
+                        triggerHaptic(15);
+                        setSettingsForm((prev) => ({
+                          ...prev,
+                          autoDetectGames: !prev.autoDetectGames,
+                        }));
+                      }}
+                    >
+                      {settingsForm.autoDetectGames ? "ATIVO" : "DESATIVADO"}
+                    </button>
+                  </div>
+
+                  <div className="settings-grid-3" style={{ marginTop: "12px" }}>
+                    <div className="settings-field">
+                      <label>Intervalo do Monitor (seg)</label>
+                      <input
+                        type="number"
+                        className="keyboard-input"
+                        min="3"
+                        max="60"
+                        value={settingsForm.monitorIntervalSec}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({
+                            ...prev,
+                            monitorIntervalSec: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+
+                    <div className="settings-field">
+                      <label>Timer de Desligamento (seg)</label>
+                      <input
+                        type="number"
+                        className="keyboard-input"
+                        min="5"
+                        max="3600"
+                        value={settingsForm.shutdownTimerSec}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({
+                            ...prev,
+                            shutdownTimerSec: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+
+                    <div className="settings-field">
+                      <label>Passo de Volume (+ / -)</label>
+                      <input
+                        type="number"
+                        className="keyboard-input"
+                        min="1"
+                        max="20"
+                        value={settingsForm.volumeStep}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({
+                            ...prev,
+                            volumeStep: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="settings-grid-2" style={{ marginTop: "12px" }}>
+                    <div className="settings-field">
+                      <label>
+                        Sensibilidade do Touchpad Virtual:{" "}
+                        <strong>{Number(settingsForm.touchpadSensitivity || 2.1).toFixed(1)}x</strong>
+                      </label>
+                      <input
+                        type="range"
+                        className="volume-slider"
+                        min="0.5"
+                        max="5.0"
+                        step="0.1"
+                        value={settingsForm.touchpadSensitivity}
+                        onChange={(e) =>
+                          setSettingsForm((prev) => ({
+                            ...prev,
+                            touchpadSensitivity: parseFloat(e.target.value),
+                          }))
+                        }
+                      />
+                    </div>
+
+                    <div className="settings-field">
+                      <label>Modo Padrão de Fechamento</label>
+                      <div className="side-menu-segment">
+                        <button
+                          type="button"
+                          className={`side-menu-segment-btn ${
+                            settingsForm.defaultCloseMode === "force" ? "active" : ""
+                          }`}
+                          onClick={() =>
+                            setSettingsForm((prev) => ({ ...prev, defaultCloseMode: "force" }))
+                          }
+                        >
+                          🛑 Taskkill (Forçado)
+                        </button>
+                        <button
+                          type="button"
+                          className={`side-menu-segment-btn ${
+                            settingsForm.defaultCloseMode === "soft" ? "active" : ""
+                          }`}
+                          onClick={() =>
+                            setSettingsForm((prev) => ({ ...prev, defaultCloseMode: "soft" }))
+                          }
+                        >
+                          🪟 Alt+F4 (Suave)
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="modal-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setSettingsModalOpen(false)}
+                  >
+                    Cancelar
+                  </button>
+                  <button type="submit" className="btn btn-primary" disabled={settingsSaving}>
+                    {settingsSaving ? "Salvando..." : "💾 Salvar Configurações"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Modal de Confirmação de Energia (Desligar / Suspender) */}
       {powerModal && (
         <div className="modal-backdrop" onClick={() => setPowerModal(null)}>
@@ -2119,7 +2997,7 @@ export default function App() {
             </h3>
             <p>
               {powerModal === "shutdown"
-                ? "O computador na sala será desligado em 30 segundos (você poderá cancelar caso mude de ideia)."
+                ? `O computador na sala será desligado em ${settingsForm.shutdownTimerSec || 30} segundos (você poderá cancelar caso mude de ideia).`
                 : "O computador entrará no modo de suspensão."}
             </p>
             <div className="modal-actions">
@@ -2181,7 +3059,7 @@ export default function App() {
                 <div className="side-menu-brand-text">
                   <strong>GameLauncher</strong>
                   <span className="online-badge">
-                    <span className="badge-dot"></span> Online • {SERVER_IP}
+                    <span className="badge-dot"></span> Online • {settingsForm.serverIp || SERVER_IP}
                   </span>
                 </div>
               </div>
@@ -2297,6 +3175,31 @@ export default function App() {
                   <span className="side-menu-title-total">
                     Total: {playTimeRanking.totalLabel}
                   </span>
+                </div>
+
+                <div className="side-menu-json-actions">
+                  <button
+                    type="button"
+                    className="side-menu-json-btn"
+                    onClick={exportTimesJson}
+                    disabled={exportingTimes}
+                    title="Exportar tempos de jogos, tempo de sofá e sessões para arquivo JSON"
+                  >
+                    📤 Exportar JSON
+                  </button>
+                  <button
+                    type="button"
+                    className="side-menu-json-btn"
+                    onClick={() =>
+                      menuRun(() => {
+                        loadTimeSummary();
+                        setTimesModalOpen(true);
+                      })
+                    }
+                    title="Importar JSON ou ver detalhes de tempos e sessões"
+                  >
+                    📥 Importar / Ver
+                  </button>
                 </div>
 
                 {playTimeRanking.played.length === 0 ? (
@@ -2449,6 +3352,25 @@ export default function App() {
               {/* Sistema */}
               <div className="side-menu-section">
                 <span className="side-menu-title">Sistema</span>
+                <button
+                  className="side-menu-item"
+                  onClick={() => menuRun(() => loadSettings(true))}
+                >
+                  <span className="side-menu-icon">⚙️</span>
+                  <span className="side-menu-label">Configurar Automação & Sistema</span>
+                </button>
+                <button
+                  className="side-menu-item"
+                  onClick={() =>
+                    menuRun(() => {
+                      loadTimeSummary();
+                      setTimesModalOpen(true);
+                    })
+                  }
+                >
+                  <span className="side-menu-icon">⏱️</span>
+                  <span className="side-menu-label">Tempos & Backup (JSON)</span>
+                </button>
                 <button
                   className="side-menu-item"
                   onClick={() => menuRun(refreshGames)}

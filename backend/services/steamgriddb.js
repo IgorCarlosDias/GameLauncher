@@ -4,17 +4,20 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env") });
 require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 
-const API_KEY = process.env.STEAMGRIDDB_KEY;
+function getApiKey() {
+  return (process.env.STEAMGRIDDB_KEY || "").trim();
+}
 
 async function getGameCover(gameName) {
-  if (!API_KEY) return null;
+  const apiKey = getApiKey();
+  if (!apiKey) return null;
 
   try {
     const search = await axios.get(
       `https://www.steamgriddb.com/api/v2/search/autocomplete/${encodeURIComponent(gameName)}`,
       {
         headers: {
-          Authorization: `Bearer ${API_KEY}`,
+          Authorization: `Bearer ${apiKey}`,
         },
       }
     );
@@ -30,7 +33,7 @@ async function getGameCover(gameName) {
       `https://www.steamgriddb.com/api/v2/grids/game/${gameId}?dimensions=600x900`,
       {
         headers: {
-          Authorization: `Bearer ${API_KEY}`,
+          Authorization: `Bearer ${apiKey}`,
         },
       }
     );
@@ -44,7 +47,7 @@ async function getGameCover(gameName) {
       `https://www.steamgriddb.com/api/v2/grids/game/${gameId}`,
       {
         headers: {
-          Authorization: `Bearer ${API_KEY}`,
+          Authorization: `Bearer ${apiKey}`,
         },
       }
     );
@@ -61,14 +64,15 @@ async function getGameCover(gameName) {
 }
 
 async function searchGameCovers(query) {
-  if (!API_KEY || !query) return [];
+  const apiKey = getApiKey();
+  if (!apiKey || !query) return [];
 
   try {
     const search = await axios.get(
       `https://www.steamgriddb.com/api/v2/search/autocomplete/${encodeURIComponent(query)}`,
       {
         headers: {
-          Authorization: `Bearer ${API_KEY}`,
+          Authorization: `Bearer ${apiKey}`,
         },
       }
     );
@@ -86,7 +90,7 @@ async function searchGameCovers(query) {
           `https://www.steamgriddb.com/api/v2/grids/game/${match.id}`,
           {
             headers: {
-              Authorization: `Bearer ${API_KEY}`,
+              Authorization: `Bearer ${apiKey}`,
             },
           }
         );
@@ -116,7 +120,59 @@ async function searchGameCovers(query) {
   }
 }
 
+async function testSteamGridDbKey(customKey) {
+  const apiKey = (customKey !== undefined ? String(customKey) : getApiKey()).trim();
+  if (!apiKey) {
+    return { valid: false, message: "Chave de API vazia." };
+  }
+
+  if (!/^[a-f0-9]{32}$/i.test(apiKey)) {
+    return {
+      valid: false,
+      message: "Formato de chave inválido (a chave do SteamGridDB deve ter 32 caracteres hexadecimais).",
+    };
+  }
+
+  try {
+    const response = await axios.get(
+      `https://www.steamgriddb.com/api/v2/search/autocomplete/portal_${Date.now()}`,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        timeout: 8000,
+      }
+    );
+
+    if (response.data?.success) {
+      return {
+        valid: true,
+        message: "Chave SteamGridDB válida e autenticada com sucesso!",
+        sampleCount: Array.isArray(response.data.data) ? response.data.data.length : 0,
+      };
+    }
+
+    return {
+      valid: false,
+      message: "Resposta inesperada da API SteamGridDB.",
+    };
+  } catch (error) {
+    const status = error.response?.status;
+    if (status === 401 || status === 403) {
+      return {
+        valid: false,
+        message: "Chave inválida ou não autorizada pelo SteamGridDB (HTTP " + status + ").",
+      };
+    }
+    return {
+      valid: false,
+      message: "Erro ao conectar ao SteamGridDB: " + (error.message || "Falha desconhecida"),
+    };
+  }
+}
+
 module.exports = {
   getGameCover,
   searchGameCovers,
+  testSteamGridDbKey,
 };

@@ -7,10 +7,11 @@ const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const fs = require("fs");
 const os = require("os");
+const crypto = require("crypto");
 const { exec, execFile } = require("child_process");
 const axios = require("axios");
 
-const { getGameCover, searchGameCovers } = require("./services/steamgriddb");
+const { getGameCover, searchGameCovers, testSteamGridDbKey } = require("./services/steamgriddb");
 const { dbRun, dbGet, dbAll, initDatabase } = require("./database");
 
 let ws = null;
@@ -37,7 +38,7 @@ function resolveShortcut(filePath) {
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 
 // Rate limiters para proteção contra abuso e conformidade com CodeQL
 const apiLimiter = rateLimit({
@@ -66,16 +67,32 @@ app.use((req, res, next) => {
 });
 
 // =========================
-// CONFIGURAÇÕES (via .env)
+// CONFIGURAÇÕES (via .env & Automação)
 // =========================
 
-const PORT = process.env.PORT;
-const FRONTEND_PORT = process.env.FRONTEND_PORT;
-const GAME_FOLDER = process.env.GAME_FOLDER;
-const SERVER_IP = process.env.SERVER_IP;
+let PORT = process.env.PORT || "3060";
+let FRONTEND_PORT = process.env.FRONTEND_PORT || "8060";
+let GAME_FOLDER = process.env.GAME_FOLDER || "";
+let SERVER_IP = process.env.SERVER_IP || "127.0.0.1";
+
+const ROOT_ENV_PATH = path.resolve(__dirname, "../.env");
+const BACKEND_ENV_PATH = path.join(__dirname, ".env");
+const FRONTEND_ENV_PATH = path.resolve(__dirname, "../frontend/.env");
+
+const DEFAULT_AUTOMATION_SETTINGS = {
+  autoDetectGames: true,
+  monitorIntervalSec: 8,
+  shutdownTimerSec: 30,
+  defaultCloseMode: "force",
+  touchpadSensitivity: 2.1,
+  volumeStep: 3,
+};
+
+let automationSettings = { ...DEFAULT_AUTOMATION_SETTINGS };
 
 const COVER_FOLDER = path.join(__dirname, "covers");
 const SYSCONTROL_BIN = path.join(__dirname, "syscontrol.exe");
+const PLAYTIME_JSON_PATH = path.join(__dirname, "playtime.json");
 
 if (!fs.existsSync(COVER_FOLDER)) {
   fs.mkdirSync(COVER_FOLDER, { recursive: true });
@@ -479,6 +496,7 @@ async function syncSteamPlaytimesInMemory(force = false) {
   if (!signature || (!force && signature === lastAppliedSteamSignature)) return;
   lastAppliedSteamSignature = signature;
 
+  let anyUpdated = false;
   for (const game of games) {
     if (!game.steamId) continue;
     if (activeGames.has(game.id) || (activeGame && activeGame.id === game.id)) continue;
@@ -502,6 +520,7 @@ async function syncSteamPlaytimesInMemory(force = false) {
       game.playTime = nextSec;
       game.lastPlayed = nextLast;
       game.playCount = nextCount;
+      anyUpdated = true;
       try {
         await dbRun(
           `UPDATE games SET play_time = ?, play_count = ?, last_played = ? WHERE id = ?`,
@@ -511,6 +530,10 @@ async function syncSteamPlaytimesInMemory(force = false) {
         console.error(`Erro sincronizando Steam para ${game.name}:`, err.message);
       }
     }
+  }
+
+  if (anyUpdated) {
+    await savePlaytimeJson();
   }
 }
 
@@ -602,19 +625,838 @@ function discoverGameExecutables(targetPath, fallbackExe) {
 }
 
 // =========================
-// CARREGA E SINCRONIZA JOGOS (PARALELO + SQLITE)
+// PERSISTÊNCIA, EXPORTAÇÃO E IMPORTAÇÃO DE TEMPOS EM JSON (playtime.json)
+// =========================
+
+function formatDurationText(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total === 0) return "0m";
+  if (total < 60) return `${total}s`;
+  const hrs = Math.floor(total / 3600);
+  const mins = Math.floor((total % 3600) / 60);
+  if (hrs > 0) {
+    return mins > 0 ? `${hrs}h ${mins}m` : `${hrs}h`;
+  }
+  return `${mins}m`;
+}
+
+function parseHumanDuration(val) {
+  if (typeof val === "number" && Number.isFinite(val)) {
+    return Math.max(0, Math.round(val));
+  }
+  if (typeof val !== "string") return null;
+  const trimmed = val.trim();
+  if (!trimmed) return null;
+  if (/^-?\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+
+  let total = 0;
+  let matched = false;
+  const hrs = trimmed.match(/(\d+(?:[.,]\d+)?)\s*h/i);
+  const mins = trimmed.match(/(\d+(?:[.,]\d+)?)\s*m(?!s)/i);
+  const secs = trimmed.match(/(\d+(?:[.,]\d+)?)\s*s/i);
+  if (hrs) {
+    total += Math.round(parseFloat(hrs[1].replace(",", ".")) * 3600);
+    matched = true;
+  }
+  if (mins) {
+    total += Math.round(parseFloat(mins[1].replace(",", ".")) * 60);
+    matched = true;
+  }
+  if (secs) {
+    total += Math.round(parseFloat(secs[1].replace(",", ".")));
+    matched = true;
+  }
+  return matched ? Math.max(0, total) : null;
+}
+
+async function getMeta(key, defaultVal = null) {
+  try {
+    const row = await dbGet("SELECT value FROM app_meta WHERE key = ?", [key]);
+    return row ? row.value : defaultVal;
+  } catch {
+    return defaultVal;
+  }
+}
+
+async function setMeta(key, value) {
+  try {
+    await dbRun(
+      "INSERT INTO app_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      [key, String(value)]
+    );
+  } catch (err) {
+    console.error("Erro salvando app_meta:", err.message);
+  }
+}
+
+function normalizeAutomationSettings(raw = {}) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const autoDetectGames =
+    src.autoDetectGames !== undefined
+      ? Boolean(src.autoDetectGames)
+      : automationSettings.autoDetectGames;
+
+  const monitorSecRaw = Number(src.monitorIntervalSec ?? automationSettings.monitorIntervalSec);
+  const monitorIntervalSec = Number.isFinite(monitorSecRaw)
+    ? Math.max(3, Math.min(60, Math.round(monitorSecRaw)))
+    : DEFAULT_AUTOMATION_SETTINGS.monitorIntervalSec;
+
+  const shutdownSecRaw = Number(src.shutdownTimerSec ?? automationSettings.shutdownTimerSec);
+  const shutdownTimerSec = Number.isFinite(shutdownSecRaw)
+    ? Math.max(5, Math.min(3600, Math.round(shutdownSecRaw)))
+    : DEFAULT_AUTOMATION_SETTINGS.shutdownTimerSec;
+
+  const defaultCloseMode =
+    src.defaultCloseMode === "soft" || src.defaultCloseMode === "force"
+      ? src.defaultCloseMode
+      : automationSettings.defaultCloseMode || "force";
+
+  const sensRaw = Number(src.touchpadSensitivity ?? automationSettings.touchpadSensitivity);
+  const touchpadSensitivity = Number.isFinite(sensRaw)
+    ? Math.round(Math.max(0.5, Math.min(5.0, sensRaw)) * 10) / 10
+    : DEFAULT_AUTOMATION_SETTINGS.touchpadSensitivity;
+
+  const volStepRaw = Number(src.volumeStep ?? automationSettings.volumeStep);
+  const volumeStep = Number.isFinite(volStepRaw)
+    ? Math.max(1, Math.min(20, Math.round(volStepRaw)))
+    : DEFAULT_AUTOMATION_SETTINGS.volumeStep;
+
+  return {
+    autoDetectGames,
+    monitorIntervalSec,
+    shutdownTimerSec,
+    defaultCloseMode,
+    touchpadSensitivity,
+    volumeStep,
+  };
+}
+
+async function loadAutomationSettings() {
+  try {
+    const rawJson = await getMeta("automation_settings", null);
+    if (rawJson) {
+      const parsed = JSON.parse(rawJson);
+      automationSettings = normalizeAutomationSettings(parsed);
+    }
+  } catch (err) {
+    console.error("Aviso ao carregar automation_settings:", err.message);
+  }
+  return automationSettings;
+}
+
+async function saveAutomationSettings(partial = {}) {
+  const prevInterval = automationSettings.monitorIntervalSec;
+  automationSettings = normalizeAutomationSettings({
+    ...automationSettings,
+    ...partial,
+  });
+  await setMeta("automation_settings", JSON.stringify(automationSettings));
+  if (
+    prevInterval !== automationSettings.monitorIntervalSec &&
+    typeof restartActiveGameMonitor === "function"
+  ) {
+    restartActiveGameMonitor();
+  }
+  return automationSettings;
+}
+
+function getLocalNetworkAddresses() {
+  const nets = os.networkInterfaces();
+  const list = [];
+  for (const [name, interfaces] of Object.entries(nets)) {
+    if (!Array.isArray(interfaces)) continue;
+    for (const iface of interfaces) {
+      if (iface && (iface.family === "IPv4" || iface.family === 4) && !iface.internal) {
+        list.push({
+          name,
+          address: iface.address,
+        });
+      }
+    }
+  }
+  return list;
+}
+
+function inspectGameFolder(candidatePath) {
+  const raw = String(candidatePath || "").trim();
+  if (!raw) {
+    return {
+      valid: false,
+      exists: false,
+      path: "",
+      totalGames: 0,
+      counts: { exe: 0, lnk: 0, url: 0 },
+      message: "Caminho da pasta de jogos vazio.",
+    };
+  }
+
+  try {
+    const resolved = path.resolve(raw);
+    if (!fs.existsSync(resolved)) {
+      return {
+        valid: false,
+        exists: false,
+        path: resolved,
+        totalGames: 0,
+        counts: { exe: 0, lnk: 0, url: 0 },
+        message: "A pasta informada não existe neste computador.",
+      };
+    }
+
+    const stat = fs.statSync(resolved);
+    if (!stat.isDirectory()) {
+      return {
+        valid: false,
+        exists: true,
+        path: resolved,
+        totalGames: 0,
+        counts: { exe: 0, lnk: 0, url: 0 },
+        message: "O caminho informado não é um diretório.",
+      };
+    }
+
+    const files = scanFolder(resolved);
+    const counts = { exe: 0, lnk: 0, url: 0 };
+    for (const f of files) {
+      const ext = path.extname(f).toLowerCase();
+      if (ext === ".exe") counts.exe += 1;
+      else if (ext === ".lnk") counts.lnk += 1;
+      else if (ext === ".url") counts.url += 1;
+    }
+    const totalGames = counts.exe + counts.lnk + counts.url;
+
+    return {
+      valid: true,
+      exists: true,
+      path: resolved,
+      totalGames,
+      counts,
+      message:
+        totalGames > 0
+          ? `Pasta válida! ${totalGames} jogo(s) compatível(is) encontrado(s).`
+          : "Pasta encontrada, porém nenhum arquivo .exe, .lnk ou .url foi localizado nela.",
+    };
+  } catch (err) {
+    return {
+      valid: false,
+      exists: false,
+      path: raw,
+      totalGames: 0,
+      counts: { exe: 0, lnk: 0, url: 0 },
+      message: "Erro ao verificar pasta: " + err.message,
+    };
+  }
+}
+
+function sanitizeEnvValue(val) {
+  return String(val ?? "")
+    .replace(/[\r\n]/g, "")
+    .trim();
+}
+
+function persistEnvFiles({ serverIp, port, frontendPort, gameFolder, steamGridDbKey }) {
+  const cleanIp = sanitizeEnvValue(serverIp || SERVER_IP || "127.0.0.1");
+  const cleanPort = String(Math.max(1, Math.min(65535, parseInt(port || PORT, 10) || 3060)));
+  const cleanFrontendPort = String(
+    Math.max(1, Math.min(65535, parseInt(frontendPort || FRONTEND_PORT, 10) || 8060))
+  );
+  const cleanFolder = sanitizeEnvValue(gameFolder !== undefined ? gameFolder : GAME_FOLDER);
+  const cleanKey = sanitizeEnvValue(
+    steamGridDbKey !== undefined ? steamGridDbKey : process.env.STEAMGRIDDB_KEY || ""
+  );
+  const apiUrl = `http://${cleanIp}:${cleanPort}`;
+
+  const rootEnvContent = [
+    "# ===========================================",
+    "# CONFIGURACAO CENTRAL DO GAMELAUNCHER",
+    "# ===========================================",
+    "",
+    "# IP da maquina na rede local",
+    `SERVER_IP=${cleanIp}`,
+    "",
+    "# Portas do Backend (API) e Frontend (Interface Web)",
+    `PORT=${cleanPort}`,
+    `FRONTEND_PORT=${cleanFrontendPort}`,
+    "",
+    "# Variaveis automaticas para o Vite (Frontend)",
+    `VITE_SERVER_IP=${cleanIp}`,
+    `VITE_PORT=${cleanFrontendPort}`,
+    `VITE_API_PORT=${cleanPort}`,
+    `VITE_API_URL=${apiUrl}`,
+    "",
+    "# Pasta de Jogos e Chave da API de Capas",
+    `GAME_FOLDER=${cleanFolder}`,
+    `STEAMGRIDDB_KEY=${cleanKey}`,
+    "",
+  ].join("\n");
+
+  const backendEnvContent = [
+    `STEAMGRIDDB_KEY=${cleanKey}`,
+    `SERVER_IP=${cleanIp}`,
+    `PORT=${cleanPort}`,
+    `FRONTEND_PORT=${cleanFrontendPort}`,
+    `GAME_FOLDER=${cleanFolder}`,
+    "",
+  ].join("\n");
+
+  const frontendEnvContent = [
+    `VITE_SERVER_IP=${cleanIp}`,
+    `VITE_PORT=${cleanFrontendPort}`,
+    `VITE_API_PORT=${cleanPort}`,
+    `VITE_API_URL=${apiUrl}`,
+    "",
+  ].join("\n");
+
+  fs.writeFileSync(ROOT_ENV_PATH, rootEnvContent, "utf8");
+  fs.writeFileSync(BACKEND_ENV_PATH, backendEnvContent, "utf8");
+  if (fs.existsSync(path.dirname(FRONTEND_ENV_PATH))) {
+    fs.writeFileSync(FRONTEND_ENV_PATH, frontendEnvContent, "utf8");
+  }
+
+  process.env.SERVER_IP = cleanIp;
+  process.env.PORT = cleanPort;
+  process.env.FRONTEND_PORT = cleanFrontendPort;
+  process.env.GAME_FOLDER = cleanFolder;
+  process.env.STEAMGRIDDB_KEY = cleanKey;
+
+  SERVER_IP = cleanIp;
+  PORT = cleanPort;
+  FRONTEND_PORT = cleanFrontendPort;
+  GAME_FOLDER = cleanFolder;
+
+  return {
+    serverIp: cleanIp,
+    port: Number(cleanPort),
+    frontendPort: Number(cleanFrontendPort),
+    gameFolder: cleanFolder,
+    steamGridDbKey: cleanKey,
+    apiUrl,
+  };
+}
+
+async function buildPlaytimePayload() {
+  const dbGames = await dbAll("SELECT * FROM games");
+  const dbSessions = await dbAll(
+    `SELECT s.*, g.name AS db_game_name, g.custom_name AS db_custom_name, g.path AS db_game_path
+     FROM sessions s
+     LEFT JOIN games g ON s.game_id = g.id
+     ORDER BY s.id ASC`
+  );
+
+  const memById = new Map(games.map((g) => [g.id, g]));
+  const mergedGames = dbGames.map((row) => {
+    const mem = memById.get(row.id);
+    const playTime = mem ? Number(mem.playTime) || 0 : Number(row.play_time) || 0;
+    const playCount = mem ? Number(mem.playCount) || 0 : Number(row.play_count) || 0;
+    const favorite = mem ? Boolean(mem.favorite) : Boolean(row.favorite);
+    const lastPlayed = (mem ? mem.lastPlayed : row.last_played) || null;
+    const customName = (mem ? mem.customName : row.custom_name) || null;
+    const originalName = row.name || mem?.originalName || "";
+    const displayName = customName || originalName;
+
+    return {
+      id: row.id,
+      name: displayName,
+      originalName,
+      customName,
+      path: row.path,
+      extension: row.extension,
+      resolvedExe: row.resolved_exe,
+      steamId: row.steam_id || null,
+      cover: row.cover || null,
+      favorite,
+      playTime,
+      playTimeFormatted: formatDurationText(playTime),
+      playCount,
+      lastPlayed,
+    };
+  });
+
+  mergedGames.sort((a, b) => {
+    if (a.playTime !== b.playTime) return b.playTime - a.playTime;
+    return a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+  });
+
+  const formattedSessions = dbSessions.map((s) => {
+    const duration = Number(s.duration) || 0;
+    const gameName = s.db_custom_name || s.db_game_name || `Jogo #${s.game_id}`;
+    return {
+      id: s.id,
+      gameId: s.game_id,
+      gameName,
+      gameOriginalName: s.db_game_name || gameName,
+      gamePath: s.db_game_path || null,
+      startedAt: s.started_at || null,
+      endedAt: s.ended_at || null,
+      duration,
+      durationFormatted: formatDurationText(duration),
+    };
+  });
+
+  const gamesPlayTimeSeconds = mergedGames.reduce((acc, g) => acc + (Number(g.playTime) || 0), 0);
+  const sessionsTotalDurationSeconds = formattedSessions.reduce(
+    (acc, s) => acc + (Number(s.duration) || 0),
+    0
+  );
+  const couchOffsetRaw = await getMeta("couch_time_offset", "0");
+  const couchTimeOffsetSeconds = parseInt(couchOffsetRaw, 10) || 0;
+  const couchTimeSeconds = Math.max(0, gamesPlayTimeSeconds + couchTimeOffsetSeconds);
+
+  let activeSessionSeconds = 0;
+  for (const ag of activeGames.values()) {
+    if (ag.startedAt) {
+      const diff = Math.floor((Date.now() - new Date(ag.startedAt).getTime()) / 1000);
+      if (diff > 0) activeSessionSeconds += diff;
+    }
+  }
+
+  const totalPlayCount = mergedGames.reduce((acc, g) => acc + (Number(g.playCount) || 0), 0);
+  const playedGames = mergedGames.filter((g) => g.playTime > 0);
+  const topGame = playedGames[0] || null;
+
+  let lastPlayedAt = null;
+  let lastPlayedGame = null;
+  for (const g of mergedGames) {
+    if (!g.lastPlayed) continue;
+    if (!lastPlayedAt || new Date(g.lastPlayed).getTime() > new Date(lastPlayedAt).getTime()) {
+      lastPlayedAt = g.lastPlayed;
+      lastPlayedGame = {
+        id: g.id,
+        name: g.name,
+        lastPlayed: g.lastPlayed,
+        playTimeSeconds: g.playTime,
+        playTimeFormatted: g.playTimeFormatted,
+      };
+    }
+  }
+
+  return {
+    version: "1.0",
+    updatedAt: new Date().toISOString(),
+    summary: {
+      couchTimeSeconds,
+      couchTimeFormatted: formatDurationText(couchTimeSeconds),
+      couchTimeOffsetSeconds,
+      gamesPlayTimeSeconds,
+      gamesPlayTimeFormatted: formatDurationText(gamesPlayTimeSeconds),
+      sessionsTotalDurationSeconds,
+      sessionsTotalDurationFormatted: formatDurationText(sessionsTotalDurationSeconds),
+      activeSessionSeconds,
+      activeSessionFormatted: formatDurationText(activeSessionSeconds),
+      totalPlayCount,
+      totalSessionsRecorded: formattedSessions.length,
+      totalGames: mergedGames.length,
+      playedGamesCount: playedGames.length,
+      unplayedGamesCount: mergedGames.length - playedGames.length,
+      favoritesCount: mergedGames.filter((g) => g.favorite).length,
+      lastPlayedAt,
+      lastPlayedGame,
+      mostPlayedGame: topGame
+        ? {
+            id: topGame.id,
+            name: topGame.name,
+            playTimeSeconds: topGame.playTime,
+            playTimeFormatted: topGame.playTimeFormatted,
+            playCount: topGame.playCount,
+            lastPlayed: topGame.lastPlayed,
+          }
+        : null,
+    },
+    games: mergedGames,
+    sessions: formattedSessions,
+  };
+}
+
+async function savePlaytimeJson() {
+  try {
+    const payload = await buildPlaytimePayload();
+    const jsonString = JSON.stringify(payload, null, 2);
+    fs.writeFileSync(PLAYTIME_JSON_PATH, jsonString, "utf8");
+    const hash = crypto.createHash("sha256").update(jsonString).digest("hex");
+    await setMeta("last_json_hash", hash);
+    await setMeta("last_json_sync", payload.updatedAt);
+    return payload;
+  } catch (err) {
+    console.error("Erro salvando playtime.json:", err.message);
+    return null;
+  }
+}
+
+function resolveImportedDuration(rawVal, formattedVal, existingSec) {
+  let sec =
+    typeof rawVal === "number" && Number.isFinite(rawVal)
+      ? Math.max(0, Math.round(rawVal))
+      : parseHumanDuration(rawVal);
+
+  if (typeof formattedVal === "string") {
+    const fromFmt = parseHumanDuration(formattedVal);
+    if (fromFmt !== null) {
+      if (sec === null) {
+        sec = fromFmt;
+      } else if (
+        formatDurationText(sec).toLowerCase() !== formattedVal.trim().toLowerCase() &&
+        fromFmt !== sec &&
+        (existingSec === undefined || sec === existingSec)
+      ) {
+        // Caso o usuário tenha editado o campo *Formatted manualmente no JSON
+        sec = fromFmt;
+      }
+    }
+  }
+  return sec;
+}
+
+function matchGameRecord(item, dbGames) {
+  const itemPath = String(item.path || item.file || "").trim().toLowerCase();
+  const itemSteam = item.steamId || item.steam_id ? String(item.steamId || item.steam_id).trim() : "";
+  const itemOrig = String(item.originalName || item.name || "").trim().toLowerCase();
+  const itemName = String(item.name || item.customName || item.custom_name || "").trim().toLowerCase();
+  const itemExe = String(item.resolvedExe || item.resolved_exe || "").trim().toLowerCase();
+
+  if (itemPath) {
+    const byPath = dbGames.find((g) => String(g.path || "").toLowerCase() === itemPath);
+    if (byPath) return byPath;
+  }
+  if (itemSteam) {
+    const bySteam = dbGames.find((g) => g.steam_id && String(g.steam_id) === itemSteam);
+    if (bySteam) return bySteam;
+  }
+  if (itemOrig) {
+    const byOrig = dbGames.find(
+      (g) =>
+        String(g.name || "").toLowerCase() === itemOrig ||
+        String(g.custom_name || "").toLowerCase() === itemOrig
+    );
+    if (byOrig) return byOrig;
+  }
+  if (itemName) {
+    const byName = dbGames.find(
+      (g) =>
+        String(g.custom_name || "").toLowerCase() === itemName ||
+        String(g.name || "").toLowerCase() === itemName
+    );
+    if (byName) return byName;
+  }
+  if (itemExe && itemExe.endsWith(".exe")) {
+    const byExe = dbGames.filter((g) => String(g.resolved_exe || "").toLowerCase() === itemExe);
+    if (byExe.length === 1) return byExe[0];
+  }
+  return null;
+}
+
+async function importPlaytimeData(rawPayload, mode = "merge", options = { saveToJson: true }) {
+  if (!rawPayload || typeof rawPayload !== "object") {
+    throw new Error("Formato de JSON inválido.");
+  }
+
+  const normalizedMode = mode === "replace" ? "replace" : "merge";
+  const incomingGames = Array.isArray(rawPayload.games)
+    ? rawPayload.games
+    : Array.isArray(rawPayload)
+    ? rawPayload
+    : [];
+  const incomingSessions = Array.isArray(rawPayload.sessions) ? rawPayload.sessions : [];
+  const incomingSummary =
+    rawPayload.summary && typeof rawPayload.summary === "object" ? rawPayload.summary : null;
+
+  if (incomingGames.length === 0 && incomingSessions.length === 0 && !incomingSummary) {
+    throw new Error("O arquivo JSON não contém dados de jogos, sessões ou tempo de sofá.");
+  }
+
+  let dbGames = await dbAll("SELECT * FROM games");
+  const oldIdToNewId = new Map();
+  let matchedGamesCount = 0;
+  let updatedGamesCount = 0;
+  let insertedGamesCount = 0;
+
+  for (const item of incomingGames) {
+    if (!item || typeof item !== "object") continue;
+
+    const matched = matchGameRecord(item, dbGames);
+    const existingSec = matched ? Number(matched.play_time) || 0 : undefined;
+    const resolvedSec = resolveImportedDuration(
+      item.playTime ?? item.play_time,
+      item.playTimeFormatted,
+      existingSec
+    );
+    const rawCount = item.playCount ?? item.play_count;
+    const resolvedCount =
+      typeof rawCount === "number" && Number.isFinite(rawCount)
+        ? Math.max(0, Math.round(rawCount))
+        : null;
+    const resolvedLast = item.lastPlayed ?? item.last_played ?? null;
+    const hasLastField = "lastPlayed" in item || "last_played" in item;
+    const hasFavField = "favorite" in item;
+    const resolvedFav = hasFavField ? Boolean(item.favorite) : undefined;
+    const hasCustomName = "customName" in item || "custom_name" in item;
+    const resolvedCustomName = hasCustomName
+      ? String(item.customName ?? item.custom_name ?? "").trim() || null
+      : undefined;
+
+    if (matched) {
+      matchedGamesCount++;
+      if (item.id !== undefined) {
+        oldIdToNewId.set(Number(item.id), matched.id);
+      }
+
+      let nextPlayTime = Number(matched.play_time) || 0;
+      let nextPlayCount = Number(matched.play_count) || 0;
+      let nextLastPlayed = matched.last_played || null;
+      let nextFav = Boolean(matched.favorite);
+      let nextCustomName = matched.custom_name || null;
+
+      if (normalizedMode === "replace") {
+        if (resolvedSec !== null) nextPlayTime = resolvedSec;
+        if (resolvedCount !== null) nextPlayCount = resolvedCount;
+        else if (nextPlayTime === 0) nextPlayCount = 0;
+        if (hasLastField) nextLastPlayed = resolvedLast || null;
+        if (resolvedFav !== undefined) nextFav = resolvedFav;
+        if (resolvedCustomName !== undefined) nextCustomName = resolvedCustomName;
+      } else {
+        if (resolvedSec !== null) nextPlayTime = Math.max(nextPlayTime, resolvedSec);
+        if (resolvedCount !== null) nextPlayCount = Math.max(nextPlayCount, resolvedCount);
+        else if (nextPlayTime > 0 && nextPlayCount === 0) nextPlayCount = 1;
+
+        if (resolvedLast) {
+          const curMs = nextLastPlayed ? new Date(nextLastPlayed).getTime() : 0;
+          const incMs = new Date(resolvedLast).getTime();
+          if (Number.isFinite(incMs) && incMs > curMs) {
+            nextLastPlayed = new Date(incMs).toISOString();
+          }
+        }
+        if (resolvedFav) nextFav = true;
+        if (!nextCustomName && resolvedCustomName) nextCustomName = resolvedCustomName;
+      }
+
+      await dbRun(
+        `UPDATE games SET play_time = ?, play_count = ?, last_played = ?, favorite = ?, custom_name = ? WHERE id = ?`,
+        [nextPlayTime, nextPlayCount, nextLastPlayed, nextFav ? 1 : 0, nextCustomName, matched.id]
+      );
+
+      matched.play_time = nextPlayTime;
+      matched.play_count = nextPlayCount;
+      matched.last_played = nextLastPlayed;
+      matched.favorite = nextFav ? 1 : 0;
+      matched.custom_name = nextCustomName;
+      updatedGamesCount++;
+    } else if (item.path || item.file) {
+      const insertPath = String(item.path || item.file).trim();
+      const rawName = String(item.originalName || item.name || path.basename(insertPath, path.extname(insertPath))).trim();
+      const ext = String(item.extension || path.extname(insertPath) || ".exe").toLowerCase();
+      const playTimeVal = resolvedSec !== null ? resolvedSec : 0;
+      const playCountVal = resolvedCount !== null ? resolvedCount : playTimeVal > 0 ? 1 : 0;
+      const favVal = resolvedFav ? 1 : 0;
+
+      try {
+        const res = await dbRun(
+          `INSERT INTO games (name, custom_name, path, extension, cover, resolved_exe, steam_id, play_time, play_count, favorite, last_played)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            rawName,
+            resolvedCustomName || null,
+            insertPath,
+            ext,
+            item.cover || null,
+            item.resolvedExe || item.resolved_exe || `${rawName}.exe`,
+            item.steamId || item.steam_id || null,
+            playTimeVal,
+            playCountVal,
+            favVal,
+            resolvedLast || null,
+          ]
+        );
+        if (item.id !== undefined) {
+          oldIdToNewId.set(Number(item.id), res.lastID);
+        }
+        insertedGamesCount++;
+      } catch {
+        // Ignore duplicate path constraint error
+      }
+    }
+  }
+
+  dbGames = await dbAll("SELECT * FROM games");
+
+  // Importar sessões (outros tempos / histórico de partidas)
+  let importedSessionsCount = 0;
+  if (Array.isArray(rawPayload.sessions)) {
+    if (normalizedMode === "replace") {
+      await dbRun("DELETE FROM sessions");
+    }
+
+    const existingSessions =
+      normalizedMode === "merge"
+        ? await dbAll("SELECT game_id, started_at, ended_at, duration FROM sessions")
+        : [];
+    const sessionSignatures = new Set(
+      existingSessions.map((s) => `${s.started_at || ""}|${s.ended_at || ""}|${s.duration || 0}`)
+    );
+
+    for (const s of incomingSessions) {
+      if (!s || typeof s !== "object") continue;
+      const durationSec = resolveImportedDuration(
+        s.duration,
+        s.durationFormatted,
+        undefined
+      );
+      if (durationSec === null && !s.startedAt && !s.started_at) continue;
+
+      const startedAt = s.startedAt || s.started_at || null;
+      const endedAt = s.endedAt || s.ended_at || null;
+      const finalDuration = durationSec !== null ? durationSec : 0;
+
+      const sig = `${startedAt || ""}|${endedAt || ""}|${finalDuration}`;
+      if (normalizedMode === "merge" && sessionSignatures.has(sig)) {
+        continue;
+      }
+
+      let targetGameId = null;
+      const rawGameId = Number(s.gameId ?? s.game_id);
+      if (oldIdToNewId.has(rawGameId)) {
+        targetGameId = oldIdToNewId.get(rawGameId);
+      } else {
+        const matchedSessionGame = matchGameRecord(
+          {
+            path: s.gamePath,
+            originalName: s.gameOriginalName,
+            name: s.gameName,
+          },
+          dbGames
+        );
+        if (matchedSessionGame) {
+          targetGameId = matchedSessionGame.id;
+        } else if (Number.isInteger(rawGameId) && rawGameId > 0) {
+          targetGameId = rawGameId;
+        }
+      }
+
+      await dbRun(
+        `INSERT INTO sessions (game_id, started_at, ended_at, duration) VALUES (?, ?, ?, ?)`,
+        [targetGameId, startedAt, endedAt, finalDuration]
+      );
+      sessionSignatures.add(sig);
+      importedSessionsCount++;
+    }
+  }
+
+  // Atualizar Tempo de Sofá (couchTimeSeconds / couchTimeOffsetSeconds)
+  const totalDbPlayTime = dbGames.reduce((acc, g) => acc + (Number(g.play_time) || 0), 0);
+  if (incomingSummary) {
+    const prevOffsetRaw = await getMeta("couch_time_offset", "0");
+    const prevOffset = parseInt(prevOffsetRaw, 10) || 0;
+    const summaryGamesSec = Number(incomingSummary.gamesPlayTimeSeconds) || 0;
+    const summaryOffsetSec =
+      typeof incomingSummary.couchTimeOffsetSeconds === "number"
+        ? Math.round(incomingSummary.couchTimeOffsetSeconds)
+        : 0;
+
+    const resolvedCouchSec = resolveImportedDuration(
+      incomingSummary.couchTimeSeconds,
+      incomingSummary.couchTimeFormatted,
+      summaryGamesSec + summaryOffsetSec
+    );
+
+    if (
+      resolvedCouchSec !== null &&
+      resolvedCouchSec !== summaryGamesSec + summaryOffsetSec
+    ) {
+      // Usuário editou diretamente o couchTimeSeconds ou couchTimeFormatted no JSON
+      const newOffset = resolvedCouchSec - totalDbPlayTime;
+      await setMeta("couch_time_offset", String(newOffset));
+    } else if (typeof incomingSummary.couchTimeOffsetSeconds === "number") {
+      const nextOffset =
+        normalizedMode === "replace"
+          ? summaryOffsetSec
+          : Math.max(prevOffset, summaryOffsetSec);
+      await setMeta("couch_time_offset", String(nextOffset));
+    } else if (
+      resolvedCouchSec !== null &&
+      incomingGames.length === 0
+    ) {
+      const newOffset = resolvedCouchSec - totalDbPlayTime;
+      await setMeta("couch_time_offset", String(newOffset));
+    }
+  }
+
+  // Sincroniza objetos em memória (games array)
+  const dbById = new Map(dbGames.map((r) => [r.id, r]));
+  for (const g of games) {
+    const row = dbById.get(g.id);
+    if (row) {
+      g.playTime = Number(row.play_time) || 0;
+      g.playCount = Number(row.play_count) || 0;
+      g.lastPlayed = row.last_played || null;
+      g.favorite = Boolean(row.favorite);
+      g.customName = row.custom_name || "";
+      g.name = row.custom_name || row.name;
+    }
+  }
+
+  games.sort((a, b) => {
+    if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  const savedPayload =
+    options?.saveToJson !== false ? await savePlaytimeJson() : await buildPlaytimePayload();
+
+  return {
+    mode: normalizedMode,
+    matchedGamesCount,
+    updatedGamesCount,
+    insertedGamesCount,
+    importedSessionsCount,
+    payload: savedPayload,
+  };
+}
+
+// Na inicialização, verifica se playtime.json existe e foi editado externamente ou se o SQLite está vazio
+async function syncFromLocalJsonOnStartup() {
+  if (!fs.existsSync(PLAYTIME_JSON_PATH)) return;
+  try {
+    const rawContent = fs.readFileSync(PLAYTIME_JSON_PATH, "utf8");
+    if (!rawContent.trim()) return;
+    const parsed = JSON.parse(rawContent);
+    const currentHash = crypto.createHash("sha256").update(rawContent).digest("hex");
+    const lastHash = await getMeta("last_json_hash");
+    const countRow = await dbGet("SELECT COUNT(*) AS cnt FROM games");
+    const dbGamesCount = countRow?.cnt || 0;
+
+    if (dbGamesCount === 0) {
+      console.log("[JSON Sync] Banco SQLite vazio detectado. Restaurando tempos de playtime.json...");
+      await importPlaytimeData(parsed, "merge", { saveToJson: false });
+    } else if (lastHash && currentHash !== lastHash) {
+      console.log("[JSON Sync] Alterações externas detectadas em playtime.json. Sincronizando tempos...");
+      await importPlaytimeData(parsed, "replace", { saveToJson: false });
+    } else if (!lastHash) {
+      await importPlaytimeData(parsed, "merge", { saveToJson: false });
+    }
+  } catch (err) {
+    console.error("Aviso ao ler playtime.json na inicialização:", err.message);
+  }
+}
+
+// =========================
+// CARREGA E SINCRONIZA JOGOS (PARALELO + SQLITE + JSON)
 // =========================
 
 async function loadGames() {
   await initDatabase();
+  await loadAutomationSettings();
+  if (typeof restartActiveGameMonitor === "function") {
+    restartActiveGameMonitor();
+  }
+  await syncFromLocalJsonOnStartup();
 
   if (!GAME_FOLDER) {
     console.log("GAME_FOLDER não configurado no .env");
+    await savePlaytimeJson();
     return;
   }
 
   if (!fs.existsSync(GAME_FOLDER)) {
     console.log("Pasta de jogos não encontrada:", GAME_FOLDER);
+    await savePlaytimeJson();
     return;
   }
 
@@ -659,8 +1501,15 @@ async function loadGames() {
         resolvedExe = candidateExes[0] || path.basename(file);
       }
 
-      // Verifica se já existe no banco SQLite
+      // Verifica se já existe no banco SQLite (por path ou por nome caso a pasta tenha mudado)
       let dbRow = await dbGet("SELECT * FROM games WHERE path = ?", [file]);
+      if (!dbRow) {
+        const byName = await dbGet("SELECT * FROM games WHERE LOWER(name) = LOWER(?)", [rawName]);
+        if (byName && (!byName.path || !fs.existsSync(byName.path))) {
+          await dbRun("UPDATE games SET path = ? WHERE id = ?", [file, byName.id]);
+          dbRow = { ...byName, path: file };
+        }
+      }
 
       const searchTitle = dbRow?.custom_name || rawName;
       let cover = dbRow?.cover;
@@ -741,10 +1590,11 @@ async function loadGames() {
   });
 
   games = scannedItems;
-  console.log(`${games.length} jogos sincronizados com SQLite (incluindo dados da Steam).`);
+  await savePlaytimeJson();
+  console.log(`${games.length} jogos sincronizados com SQLite e playtime.json (incluindo dados da Steam).`);
 }
 
-// Encerra sessão ativa e grava tempo jogado no SQLite
+// Encerra sessão ativa e grava tempo jogado no SQLite + playtime.json
 async function finishActiveGameSession(targetId = null) {
   const target = targetId
     ? activeGames.get(targetId) || (activeGame && activeGame.id === targetId ? activeGame : null)
@@ -792,6 +1642,8 @@ async function finishActiveGameSession(targetId = null) {
       g.playTime = newPlayTime;
       g.lastPlayed = endedAt;
     }
+
+    await savePlaytimeJson();
 
     console.log(`[Sessão] ${closed.name} finalizado. Duração: ${durationSec}s (Total: ${newPlayTime}s)`);
   } catch (err) {
@@ -1060,12 +1912,14 @@ async function adoptDetectedGame({ game, via, pid, exeName }) {
   if (!activeGame) activeGame = newActive;
 
   try {
+    const nowIso = new Date().toISOString();
     await dbRun(
       `UPDATE games SET play_count = COALESCE(play_count, 0) + 1, last_played = ? WHERE id = ?`,
-      [new Date().toISOString(), game.id]
+      [nowIso, game.id]
     );
     game.playCount = (game.playCount || 0) + 1;
-    game.lastPlayed = new Date().toISOString();
+    game.lastPlayed = nowIso;
+    await savePlaytimeJson();
   } catch (err) {
     console.error("Erro atualizando jogo detectado:", err.message);
   }
@@ -1117,6 +1971,275 @@ app.get("/games", async (req, res) => {
   );
 });
 
+// Resumo de tempos (tempo de jogos, tempo de sofá, sessões e arquivo JSON)
+app.get("/times", async (req, res) => {
+  try {
+    await syncSteamPlaytimesInMemory();
+    const payload = await buildPlaytimePayload();
+    res.json({
+      success: true,
+      jsonFile: "backend/playtime.json",
+      updatedAt: payload.updatedAt,
+      summary: payload.summary,
+      recentSessions: payload.sessions.slice(-30).reverse(),
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+// Exportar JSON completo com tempo de jogos, tempo de sofá e histórico de sessões
+app.get("/times/export", async (req, res) => {
+  try {
+    await syncSteamPlaytimesInMemory();
+    const payload = await savePlaytimeJson();
+    if (!payload) {
+      return res.status(500).json({
+        success: false,
+        message: "Não foi possível gerar o arquivo JSON de tempos.",
+      });
+    }
+
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const fileName = `gamelauncher-tempos-${dateStamp}.json`;
+
+    if (req.query.download === "1" || req.query.download === "true") {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+      return res.send(JSON.stringify(payload, null, 2));
+    }
+
+    res.json(payload);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+// Importar JSON de tempos (mesclar ou substituir)
+app.post("/times/import", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const mode = body.mode || req.query.mode || "merge";
+    const rawData =
+      body.data && typeof body.data === "object" ? body.data : body;
+
+    const result = await importPlaytimeData(rawData, mode, { saveToJson: true });
+    res.json({
+      success: true,
+      mode: result.mode,
+      stats: {
+        matchedGames: result.matchedGamesCount,
+        updatedGames: result.updatedGamesCount,
+        insertedGames: result.insertedGamesCount,
+        importedSessions: result.importedSessionsCount,
+      },
+      summary: result.payload?.summary || null,
+      recentSessions: result.payload?.sessions ? result.payload.sessions.slice(-30).reverse() : [],
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message || "Falha ao importar JSON de tempos.",
+    });
+  }
+});
+
+// Recarregar tempos diretamente do arquivo local backend/playtime.json
+app.post("/times/reload-local", async (req, res) => {
+  try {
+    if (!fs.existsSync(PLAYTIME_JSON_PATH)) {
+      const created = await savePlaytimeJson();
+      return res.json({
+        success: true,
+        mode: "merge",
+        stats: {
+          matchedGames: games.length,
+          updatedGames: 0,
+          insertedGames: 0,
+          importedSessions: 0,
+        },
+        summary: created?.summary || null,
+        recentSessions: created?.sessions ? created.sessions.slice(-30).reverse() : [],
+      });
+    }
+
+    const rawContent = fs.readFileSync(PLAYTIME_JSON_PATH, "utf8");
+    const parsed = JSON.parse(rawContent);
+    const mode = req.body?.mode || "replace";
+    const result = await importPlaytimeData(parsed, mode, { saveToJson: true });
+
+    res.json({
+      success: true,
+      mode: result.mode,
+      stats: {
+        matchedGames: result.matchedGamesCount,
+        updatedGames: result.updatedGamesCount,
+        insertedGames: result.insertedGamesCount,
+        importedSessions: result.importedSessionsCount,
+      },
+      summary: result.payload?.summary || null,
+      recentSessions: result.payload?.sessions ? result.payload.sessions.slice(-30).reverse() : [],
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: "Erro ao ler backend/playtime.json: " + error.message,
+    });
+  }
+});
+
+// =========================
+// CONFIGURAÇÕES DA AUTOMAÇÃO E SISTEMA (.env + SQLite app_meta)
+// =========================
+
+app.get("/settings", async (req, res) => {
+  try {
+    await loadAutomationSettings();
+    const folderCheck = inspectGameFolder(GAME_FOLDER);
+    const networkInterfaces = getLocalNetworkAddresses();
+    const steamGridDbKey = (process.env.STEAMGRIDDB_KEY || "").trim();
+
+    res.json({
+      success: true,
+      env: {
+        serverIp: SERVER_IP || "127.0.0.1",
+        port: Number(PORT) || 3060,
+        frontendPort: Number(FRONTEND_PORT) || 8060,
+        apiUrl: `http://${SERVER_IP || "127.0.0.1"}:${PORT || 3060}`,
+        frontendUrl: `http://${SERVER_IP || "127.0.0.1"}:${FRONTEND_PORT || 8060}`,
+        gameFolder: GAME_FOLDER || "",
+        steamGridDbKey,
+        hasSteamGridDbKey: Boolean(steamGridDbKey),
+      },
+      automation: {
+        ...automationSettings,
+      },
+      folderStatus: folderCheck,
+      networkInterfaces,
+      files: {
+        rootEnv: ".env",
+        backendEnv: "backend/.env",
+        frontendEnv: "frontend/.env",
+        playtimeJson: "backend/playtime.json",
+        sqliteDb: "backend/database.sqlite",
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Erro ao carregar configurações: " + error.message,
+    });
+  }
+});
+
+app.post("/settings/validate-folder", async (req, res) => {
+  try {
+    const candidate = req.body?.gameFolder ?? GAME_FOLDER;
+    const result = inspectGameFolder(candidate);
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
+
+app.post("/settings/test-steamgriddb", async (req, res) => {
+  try {
+    const candidateKey =
+      req.body?.steamGridDbKey !== undefined
+        ? req.body.steamGridDbKey
+        : process.env.STEAMGRIDDB_KEY || "";
+    const result = await testSteamGridDbKey(candidateKey);
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      valid: false,
+      message: error.message,
+    });
+  }
+});
+
+app.put("/settings", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const envInput = body.env && typeof body.env === "object" ? body.env : body;
+    const autoInput =
+      body.automation && typeof body.automation === "object" ? body.automation : body;
+
+    const prevIp = SERVER_IP;
+    const prevPort = String(PORT);
+    const prevFrontendPort = String(FRONTEND_PORT);
+    const prevFolder = GAME_FOLDER;
+    const prevKey = (process.env.STEAMGRIDDB_KEY || "").trim();
+
+    const savedEnv = persistEnvFiles({
+      serverIp: envInput.serverIp !== undefined ? envInput.serverIp : SERVER_IP,
+      port: envInput.port !== undefined ? envInput.port : PORT,
+      frontendPort:
+        envInput.frontendPort !== undefined ? envInput.frontendPort : FRONTEND_PORT,
+      gameFolder: envInput.gameFolder !== undefined ? envInput.gameFolder : GAME_FOLDER,
+      steamGridDbKey:
+        envInput.steamGridDbKey !== undefined
+          ? envInput.steamGridDbKey
+          : process.env.STEAMGRIDDB_KEY || "",
+    });
+
+    const savedAutomation = await saveAutomationSettings(autoInput);
+
+    const folderChanged = savedEnv.gameFolder !== prevFolder;
+    const keyChanged = savedEnv.steamGridDbKey !== prevKey;
+    const networkChanged =
+      savedEnv.serverIp !== prevIp ||
+      String(savedEnv.port) !== prevPort ||
+      String(savedEnv.frontendPort) !== prevFrontendPort;
+
+    if (folderChanged || (keyChanged && savedEnv.steamGridDbKey)) {
+      await loadGames();
+    }
+
+    const folderStatus = inspectGameFolder(GAME_FOLDER);
+
+    res.json({
+      success: true,
+      message: networkChanged
+        ? "Configurações salvas! Como IP/Porta foram alterados, reinicie o GameLauncher se mudar de endereço."
+        : "Configurações da automação e variáveis salvas e aplicadas em tempo real!",
+      requiresRestart: networkChanged,
+      reloadedLibrary: folderChanged || (keyChanged && Boolean(savedEnv.steamGridDbKey)),
+      totalGames: games.length,
+      env: {
+        ...savedEnv,
+        frontendUrl: `http://${savedEnv.serverIp}:${savedEnv.frontendPort}`,
+        hasSteamGridDbKey: Boolean(savedEnv.steamGridDbKey),
+      },
+      automation: savedAutomation,
+      folderStatus,
+      networkInterfaces: getLocalNetworkAddresses(),
+    });
+  } catch (error) {
+    console.error("Erro ao salvar configurações:", error);
+    res.status(500).json({
+      success: false,
+      message: "Falha ao salvar configurações: " + error.message,
+    });
+  }
+});
+
 // Atualizar biblioteca
 app.post("/refresh", async (req, res) => {
   await loadGames();
@@ -1142,6 +2265,8 @@ app.post("/games/:id/favorite", async (req, res) => {
     return a.name.localeCompare(b.name);
   });
 
+  await savePlaytimeJson();
+
   res.json({
     success: true,
     id: game.id,
@@ -1166,7 +2291,7 @@ app.get("/games/:id/covers", async (req, res) => {
   });
 });
 
-// Editar nome de exibição e/ou trocar capa do jogo
+// Editar nome de exibição, tempo de jogo e/ou trocar capa do jogo
 app.put("/games/:id", async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const game = games.find((g) => g.id === id);
@@ -1174,7 +2299,7 @@ app.put("/games/:id", async (req, res) => {
     return res.status(404).json({ success: false, message: "Jogo não encontrado" });
   }
 
-  const { customName, coverUrl } = req.body || {};
+  const { customName, coverUrl, playTime } = req.body || {};
 
   try {
     if (typeof customName === "string") {
@@ -1182,6 +2307,21 @@ app.put("/games/:id", async (req, res) => {
       game.customName = trimmed;
       game.name = trimmed || game.originalName;
       await dbRun(`UPDATE games SET custom_name = ? WHERE id = ?`, [trimmed || null, id]);
+    }
+
+    if (playTime !== undefined && playTime !== null && playTime !== "") {
+      const parsedSec = parseHumanDuration(playTime);
+      if (parsedSec !== null) {
+        game.playTime = parsedSec;
+        if (parsedSec > 0 && (!game.playCount || game.playCount <= 0)) {
+          game.playCount = 1;
+        }
+        await dbRun(`UPDATE games SET play_time = ?, play_count = ? WHERE id = ?`, [
+          game.playTime,
+          game.playCount || 0,
+          id,
+        ]);
+      }
     }
 
     if (coverUrl && typeof coverUrl === "string") {
@@ -1196,6 +2336,8 @@ app.put("/games/:id", async (req, res) => {
       if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
+
+    await savePlaytimeJson();
 
     res.json({
       success: true,
@@ -1279,6 +2421,7 @@ app.post("/play", systemActionLimiter, async (req, res) => {
     );
     game.playCount = (game.playCount || 0) + 1;
     game.lastPlayed = nowIso;
+    await savePlaytimeJson();
 
     const newActiveGame = {
       id: game.id,
@@ -1384,11 +2527,13 @@ function syncActiveGameState() {
         }
       }
 
-      // 2. Busca todos os jogos da biblioteca atualmente em execução no Windows
-      const candidates = await detectExternalGames();
-      for (const candidate of candidates) {
-        if (!activeGames.has(candidate.game.id)) {
-          await adoptDetectedGame(candidate);
+      // 2. Busca todos os jogos da biblioteca atualmente em execução no Windows (se autoDetectGames estiver ativo)
+      if (automationSettings.autoDetectGames !== false) {
+        const candidates = await detectExternalGames();
+        for (const candidate of candidates) {
+          if (!activeGames.has(candidate.game.id)) {
+            await adoptDetectedGame(candidate);
+          }
         }
       }
 
@@ -1424,11 +2569,30 @@ app.get("/system/active-game", async (req, res) => {
 });
 
 // Monitor em segundo plano: mantém o tempo de jogo correto mesmo sem nenhum app aberto no navegador
-setInterval(syncActiveGameState, ACTIVE_GAME_MONITOR_INTERVAL_MS);
+let activeGameMonitorTimer = null;
+
+function restartActiveGameMonitor() {
+  if (activeGameMonitorTimer) {
+    clearInterval(activeGameMonitorTimer);
+  }
+  const intervalMs =
+    Math.max(
+      3,
+      Math.min(
+        60,
+        Number(automationSettings.monitorIntervalSec) ||
+          ACTIVE_GAME_MONITOR_INTERVAL_MS / 1000
+      )
+    ) * 1000;
+  activeGameMonitorTimer = setInterval(syncActiveGameState, intervalMs);
+}
+
+restartActiveGameMonitor();
 
 // Fechar jogo: separa fechamento suave (Alt+F4) de fechamento forçado (Taskkill)
 app.post("/system/close-game", systemActionLimiter, async (req, res) => {
-  const { force = true, id, exeName: customExe } = req.body || {};
+  const defaultForce = automationSettings.defaultCloseMode !== "soft";
+  const { force = defaultForce, id, exeName: customExe } = req.body || {};
   const current = (id && activeGames.get(id)) || activeGame;
 
   // Modo suave (Alt+F4): envia apenas Alt+F4 para a janela em foco sem matar o processo com taskkill
@@ -1637,10 +2801,13 @@ app.post("/system/volume", async (req, res) => {
   const { action, value } = req.body || {};
   try {
     let out = "";
+    const stepStr = String(
+      Math.max(1, Math.min(20, Math.round(Number(automationSettings.volumeStep) || 3)))
+    );
     if (action === "up") {
-      out = await runSysControl("volup", "3");
+      out = await runSysControl("volup", stepStr);
     } else if (action === "down") {
-      out = await runSysControl("voldown", "3");
+      out = await runSysControl("voldown", stepStr);
     } else if (action === "mute") {
       out = await runSysControl("volmute");
     } else if (action === "set" && typeof value === "number") {
@@ -1777,19 +2944,33 @@ app.post("/system/keyboard", async (req, res) => {
 // Controle de Energia (Suspender, Desligar, Reiniciar, Cancelar)
 app.post("/system/power", systemActionLimiter, async (req, res) => {
   const { action } = req.body || {};
+  const timerSec = Math.max(
+    5,
+    Math.min(3600, Math.round(Number(automationSettings.shutdownTimerSec) || 30))
+  );
   try {
     if (action === "sleep") {
       runSysControl("sleep");
     } else if (action === "shutdown") {
-      execFile("shutdown.exe", ["/s", "/t", "30", "/c", "GameLauncher: Desligando PC em 30s"], { windowsHide: true }, () => {});
+      execFile(
+        "shutdown.exe",
+        ["/s", "/t", String(timerSec), "/c", `GameLauncher: Desligando PC em ${timerSec}s`],
+        { windowsHide: true },
+        () => {}
+      );
     } else if (action === "restart") {
-      execFile("shutdown.exe", ["/r", "/t", "30", "/c", "GameLauncher: Reiniciando PC em 30s"], { windowsHide: true }, () => {});
+      execFile(
+        "shutdown.exe",
+        ["/r", "/t", String(timerSec), "/c", `GameLauncher: Reiniciando PC em ${timerSec}s`],
+        { windowsHide: true },
+        () => {}
+      );
     } else if (action === "cancel") {
       execFile("shutdown.exe", ["/a"], { windowsHide: true }, () => {});
     } else {
       return res.status(400).json({ success: false, message: "Ação de energia inválida" });
     }
-    res.json({ success: true, action });
+    res.json({ success: true, action, timerSec });
   } catch (error) {
     console.error("Erro energia:", error);
     res.status(500).json({ success: false, message: error.message });
