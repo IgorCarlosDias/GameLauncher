@@ -4,7 +4,7 @@ import axios from "axios";
 const SERVER_IP = import.meta.env.VITE_SERVER_IP || (typeof window !== "undefined" ? window.location.hostname : "localhost");
 const API_PORT = import.meta.env.VITE_API_PORT || "3060";
 const API = import.meta.env.VITE_API_URL || `http://${SERVER_IP}:${API_PORT}`;
-const APP_VERSION = import.meta.env.VITE_APP_VERSION || "1.0.0";
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || "1.1.0";
 const DEFAULT_API_TOKEN = import.meta.env.VITE_API_TOKEN || "";
 
 function getActiveApiToken() {

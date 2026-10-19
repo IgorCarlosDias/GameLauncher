@@ -3,10 +3,9 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 import fs from 'fs'
 
-const pkg = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'))
-
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
+  const pkg = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf-8'))
   const rootEnv = loadEnv(mode, path.resolve(process.cwd(), '..'), '')
   const localEnv = loadEnv(mode, process.cwd(), '')
   const env = { ...rootEnv, ...localEnv }
