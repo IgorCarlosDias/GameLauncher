@@ -113,10 +113,12 @@ export default defineConfig(({ mode }) => {
     server: {
       host: '0.0.0.0',
       port: frontendPort,
+      strictPort: true,
     },
     preview: {
       host: '0.0.0.0',
       port: 8060,
+      strictPort: true,
     },
   }
 })
