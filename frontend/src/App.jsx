@@ -1,10 +1,16 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import axios from "axios";
 
-const SERVER_IP = import.meta.env.VITE_SERVER_IP || (typeof window !== "undefined" ? window.location.hostname : "localhost");
+const SERVER_IP =
+  typeof window !== "undefined" && window.location && window.location.hostname
+    ? window.location.hostname
+    : (import.meta.env.VITE_SERVER_IP || "localhost");
 const API_PORT = import.meta.env.VITE_API_PORT || "3060";
-const API = import.meta.env.VITE_API_URL || `http://${SERVER_IP}:${API_PORT}`;
-const APP_VERSION = import.meta.env.VITE_APP_VERSION || "1.1.0";
+const API =
+  typeof window !== "undefined" && window.location && window.location.hostname
+    ? `${window.location.protocol}//${window.location.hostname}:${API_PORT}`
+    : (import.meta.env.VITE_API_URL || `http://${SERVER_IP}:${API_PORT}`);
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || "1.2.0";
 let runtimeApiToken = import.meta.env.VITE_API_TOKEN || "";
 
 function getActiveApiToken() {
@@ -70,7 +76,9 @@ export default function App() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState(null);
   const [launchingId, setLaunchingId] = useState(null);
-  const [launchNotification, setLaunchNotification] = useState(null); // { name, cover, playTime }
+  // Notificação rica de jogo iniciado/encerrado: { key, kind: "started" | "ended", name, cover, detail }
+  const [launchNotification, setLaunchNotification] = useState(null);
+  const [launchNotificationLeaving, setLaunchNotificationLeaving] = useState(false);
 
   // Active game & remote states
   const [activeGame, setActiveGame] = useState(null);
@@ -95,6 +103,8 @@ export default function App() {
   const [volume, setVolume] = useState(80);
   const [muted, setMuted] = useState(false);
   const [audioDevices, setAudioDevices] = useState([]);
+  const [displayMode, setDisplayMode] = useState("internal"); // "internal" | "external" | "clone" | "extend"
+  const [switchingDisplay, setSwitchingDisplay] = useState(false);
   const [keyboardText, setKeyboardText] = useState("");
 
   // Edit Game / Cover Modal states
@@ -161,6 +171,8 @@ export default function App() {
 
   const fileInputRef = useRef(null);
   const toastTimerRef = useRef(null);
+  const notifLeaveTimerRef = useRef(null);
+  const prevActiveGamesRef = useRef([]);
   const volumeTimerRef = useRef(null);
   const lastVolumeTouchRef = useRef(0);
   const touchCanvasRef = useRef(null);
@@ -181,6 +193,23 @@ export default function App() {
     ripples: [],
     animFrameId: null,
   });
+
+  // Exibe a notificação rica (esfera que se expande até revelar o cartão)
+  const showLaunchNotification = (data) => {
+    if (notifLeaveTimerRef.current) clearTimeout(notifLeaveTimerRef.current);
+    setLaunchNotificationLeaving(false);
+    setLaunchNotification({ ...data, key: Date.now() });
+  };
+
+  // Dispensa a notificação rica reproduzindo a animação inversa (cartão recolhe até a esfera)
+  const dismissLaunchNotification = () => {
+    if (notifLeaveTimerRef.current) clearTimeout(notifLeaveTimerRef.current);
+    setLaunchNotificationLeaving(true);
+    notifLeaveTimerRef.current = setTimeout(() => {
+      setLaunchNotification(null);
+      setLaunchNotificationLeaving(false);
+    }, 450);
+  };
 
   // Show quick toast notification
   const showToast = (message, type = "info") => {
@@ -578,9 +607,10 @@ export default function App() {
   // Carregar estatísticas do PC e áudio quando abrir o Controle Remoto
   async function fetchRemoteInfo() {
     try {
-      const [statsRes, audioRes] = await Promise.all([
+      const [statsRes, audioRes, displayRes] = await Promise.all([
         axios.get(`${API}/system/stats`),
         axios.get(`${API}/system/audio`),
+        axios.get(`${API}/system/display`),
       ]);
       if (statsRes.data) setPcStats(statsRes.data);
       if (audioRes.data) {
@@ -589,6 +619,9 @@ export default function App() {
         }
         setMuted(Boolean(audioRes.data.muted));
         setAudioDevices(audioRes.data.devices || []);
+      }
+      if (displayRes?.data?.mode) {
+        setDisplayMode(displayRes.data.mode);
       }
     } catch {
       // Ignore silent error
@@ -708,12 +741,13 @@ export default function App() {
           }
         );
         setActiveSeconds(0);
-        setLaunchNotification({
+        showLaunchNotification({
+          kind: "started",
           name: game.name,
           cover: game.cover,
-          playTime: formatPlayTime(game.playTime) || "Primeira vez",
+          detail: formatPlayTime(game.playTime) || "Primeira vez",
         });
-        showToast(`🎮 ${game.name} iniciado no PC!`, "success");
+        setToast(null);
         loadGames(false);
         checkActiveGame();
       }
@@ -728,13 +762,19 @@ export default function App() {
   // Encerrar jogo atual (soft Alt+F4 vs hard Taskkill)
   async function closeActiveGame(force = true, targetParams = {}) {
     triggerHaptic(50);
+    const hadActiveGame = activeGames.length > 0 || Boolean(activeGame);
     showToast(force ? "Forçando encerramento do processo..." : "Encerrando jogo...", "info");
     try {
       const res = await axios.post(`${API}/system/close-game`, { force, ...targetParams });
-      showToast(
-        res.data?.message || (force ? "Processo encerrado" : "Jogo encerrado"),
-        "success"
-      );
+      if (hadActiveGame) {
+        // A notificação rica de "jogo encerrado" substitui o toast simples
+        setToast(null);
+      } else {
+        showToast(
+          res.data?.message || (force ? "Processo encerrado" : "Jogo encerrado"),
+          "success"
+        );
+      }
       if (Array.isArray(res.data?.activeGames)) {
         setActiveGames(res.data.activeGames);
         setActiveGame(res.data.activeGames[0] || null);
@@ -800,6 +840,31 @@ export default function App() {
       showToast(labels[action] || "Volume ajustado", "info");
     } catch {
       showToast("Falha ao ajustar volume", "error");
+    }
+  }
+
+  // Alternar tela / projeção de vídeo (Tela do computador somente <-> Segunda tela somente)
+  async function switchDisplay(mode = "toggle") {
+    triggerHaptic(35);
+    setSwitchingDisplay(true);
+    try {
+      const res = await axios.post(`${API}/system/display`, { mode });
+      if (res.data?.mode) {
+        setDisplayMode(res.data.mode);
+      }
+      const label =
+        res.data?.label ||
+        (mode === "external"
+          ? "TV (Segunda tela somente)"
+          : mode === "internal"
+          ? "Tela do PC (Tela do computador somente)"
+          : "Tela alternada");
+      showToast(`🖥️ Vídeo alternado: ${label}`, "success");
+    } catch (err) {
+      console.error("Erro ao alternar tela:", err);
+      showToast("Falha ao alternar exibição da tela", "error");
+    } finally {
+      setSwitchingDisplay(false);
     }
   }
 
@@ -1171,14 +1236,32 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Notificação de jogo iniciado: auto-fechar em 5 segundos
+  // Notificação de jogo iniciado/encerrado: auto-fechar (0,8s de animação de entrada + 4,8s visível)
   useEffect(() => {
     if (!launchNotification) return;
     const timer = setTimeout(() => {
-      setLaunchNotification(null);
-    }, 5000);
+      dismissLaunchNotification();
+    }, 5600);
     return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [launchNotification]);
+
+  // Detecta jogos que deixaram a lista de ativos (encerrados pelo app, pelo PC ou por dispensa)
+  useEffect(() => {
+    const prev = prevActiveGamesRef.current;
+    prevActiveGamesRef.current = activeGames;
+    if (!prev.length) return;
+    const removed = prev.filter((p) => !activeGames.some((g) => g.id === p.id));
+    if (!removed.length) return;
+    const closed = removed[0];
+    showLaunchNotification({
+      kind: "ended",
+      name: closed.name,
+      cover: closed.cover,
+      detail: formatPlayTimeDetailed(getGameActiveSeconds(closed)),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeGames]);
 
   // Atualiza status do PC quando o Controle Remoto está aberto
   useEffect(() => {
@@ -1370,45 +1453,54 @@ export default function App() {
         </div>
       )}
 
-      {/* Notificação Rica de Jogo Iniciado */}
+      {/* Notificação Rica de Jogo Iniciado / Encerrado */}
       {launchNotification && (
         <div
-          className="launch-notification-toast"
-          onClick={() => setLaunchNotification(null)}
+          key={launchNotification.key}
+          className={`launch-notification-toast ${
+            launchNotification.kind === "ended" ? "is-ended" : "is-started"
+          }${launchNotificationLeaving ? " is-leaving" : ""}`}
+          onClick={dismissLaunchNotification}
           role="status"
           aria-live="polite"
         >
-          <div className="launch-toast-body">
-            {launchNotification.cover ? (
-              <img
-                src={`${API}/covers/${launchNotification.cover}`}
-                alt={launchNotification.name}
-                className="launch-toast-thumb"
-              />
-            ) : (
-              <div className="launch-toast-thumb placeholder">🎮</div>
-            )}
-            <div className="launch-toast-info">
-              <div className="launch-toast-badge-row">
-                <span className="launch-toast-badge">🚀 INICIADO</span>
+          <div className="launch-toast-card">
+            <span className="launch-toast-orb" aria-hidden="true" />
+            <div className="launch-toast-body">
+              {launchNotification.cover ? (
+                <img
+                  src={`${API}/covers/${launchNotification.cover}`}
+                  alt={launchNotification.name}
+                  className="launch-toast-thumb"
+                />
+              ) : (
+                <div className="launch-toast-thumb placeholder">🎮</div>
+              )}
+              <div className="launch-toast-info">
+                <div className="launch-toast-badge-row">
+                  <span className="launch-toast-badge">
+                    {launchNotification.kind === "ended" ? "🏁 ENCERRADO" : "🚀 INICIADO"}
+                  </span>
+                </div>
+                <strong className="launch-toast-title">{launchNotification.name}</strong>
+                <span className="launch-toast-playtime">
+                  {launchNotification.kind === "ended" ? "Sessão: " : "Tempo jogado: "}
+                  <strong>{launchNotification.detail}</strong>
+                </span>
               </div>
-              <strong className="launch-toast-title">{launchNotification.name}</strong>
-              <span className="launch-toast-playtime">
-                Tempo jogado: <strong>{launchNotification.playTime}</strong>
-              </span>
+              <button
+                className="launch-toast-close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  dismissLaunchNotification();
+                }}
+                title="Fechar notificação"
+              >
+                ✕
+              </button>
             </div>
-            <button
-              className="launch-toast-close"
-              onClick={(e) => {
-                e.stopPropagation();
-                setLaunchNotification(null);
-              }}
-              title="Fechar notificação"
-            >
-              ✕
-            </button>
+            <div className="launch-toast-timer-bar" />
           </div>
-          <div className="launch-toast-timer-bar" />
         </div>
       )}
 
@@ -1585,27 +1677,41 @@ export default function App() {
               />
             )}
             <div className="hero-content">
-              <div className="hero-poster-container">
-                {heroGame.cover ? (
-                  <img
-                    src={`${API}/covers/${heroGame.cover}`}
-                    alt={heroGame.name}
-                    className="hero-poster"
-                  />
-                ) : (
-                  <div className="hero-poster-placeholder">🎮</div>
-                )}
+              <div
+                className="hero-poster-container"
+                onClick={() => playGame(heroGame)}
+                title={`Jogar ${heroGame.name}`}
+              >
+                {/* Enfeite de 1º Lugar (Troféu & Estrela) */}
+                <div className="hero-rank-ornament" title="1º Lugar • Destaque da Biblioteca">
+                  <span className="ornament-trophy" aria-hidden="true">🏆</span>
+                  <span className="ornament-label">1º LUGAR</span>
+                  <span className="ornament-star" aria-hidden="true">⭐</span>
+                </div>
+
+                <div className="hero-poster-inner">
+                  {heroGame.cover ? (
+                    <img
+                      src={`${API}/covers/${heroGame.cover}`}
+                      alt={heroGame.name}
+                      className="hero-poster"
+                    />
+                  ) : (
+                    <div className="hero-poster-placeholder">🎮</div>
+                  )}
+                </div>
+
                 {heroGame.isPlayingNow && <span className="hero-badge-live">Ao Vivo</span>}
               </div>
 
               <div className="hero-info">
                 <div className="hero-tags-row">
-                  <span className={`hero-status-pill ${heroGame.isPlayingNow ? "live" : ""}`}>
+                  <span className={`hero-status-pill ${heroGame.isPlayingNow ? "live" : "champion"}`}>
                     {heroGame.isPlayingNow
                       ? "🔥 EM EXECUÇÃO NO PC"
                       : heroGame.favorite
-                      ? "⭐ JOGO FAVORITO"
-                      : "🏆 DESTAQUE DA BIBLIOTECA"}
+                      ? "⭐ 1º LUGAR • JOGO FAVORITO"
+                      : "🏆 1º LUGAR • DESTAQUE DA BIBLIOTECA"}
                   </span>
                   <span className="hero-ext-pill">
                     {heroGame.extension === ".url" ? "Steam" : heroGame.extension === ".lnk" ? "Atalho" : "PC Game"}
@@ -1641,7 +1747,10 @@ export default function App() {
 
                   <button
                     className={`btn btn-hero-icon ${heroGame.favorite ? "active" : ""}`}
-                    onClick={(e) => toggleFavorite(e, heroGame)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleFavorite(e, heroGame);
+                    }}
                     title={heroGame.favorite ? "Remover dos Favoritos" : "Favoritar"}
                   >
                     {heroGame.favorite ? "★" : "☆"}
@@ -1649,7 +1758,10 @@ export default function App() {
 
                   <button
                     className="btn btn-hero-icon"
-                    onClick={(e) => openEditModal(e, heroGame)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openEditModal(e, heroGame);
+                    }}
                     title="Editar capa ou nome"
                   >
                     ✏️
@@ -1658,13 +1770,14 @@ export default function App() {
                   {heroGame.isPlayingNow && (
                     <button
                       className="btn btn-close-taskkill"
-                      onClick={() =>
+                      onClick={(e) => {
+                        e.stopPropagation();
                         setForceCloseModal({
                           id: heroGame.id,
                           exeName: heroGame.resolvedExe,
                           name: heroGame.name,
-                        })
-                      }
+                        });
+                      }}
                       title="Forçar encerramento imediato via taskkill"
                     >
                       🛑 Forçar encerramento
@@ -2260,6 +2373,62 @@ export default function App() {
                     </div>
                   </div>
                 )}
+
+                {/* Seletor de Tela / Projeção (Tela do PC vs TV) */}
+                <div className="remote-section">
+                  <div className="section-header-row">
+                    <span className="section-title">📺 Exibição de Tela (PC / TV)</span>
+                    <span className="display-mode-badge">
+                      {displayMode === "external"
+                        ? "📺 TV (Segunda tela)"
+                        : displayMode === "internal"
+                        ? "🖥️ Tela do PC"
+                        : displayMode === "extend"
+                        ? "🖥️+📺 Estendida"
+                        : displayMode === "clone"
+                        ? "🖥️=📺 Duplicada"
+                        : "Detectando..."}
+                    </span>
+                  </div>
+
+                  <div className="display-devices-list">
+                    <button
+                      className={`display-device-btn ${displayMode === "internal" ? "active" : ""}`}
+                      onClick={() => switchDisplay("internal")}
+                      disabled={switchingDisplay}
+                    >
+                      <span className="device-icon">🖥️</span>
+                      <div className="display-device-text">
+                        <span className="device-name">Tela do PC</span>
+                        <span className="display-subtext">Tela do computador somente</span>
+                      </div>
+                      {displayMode === "internal" && <span className="device-check">Ativo</span>}
+                    </button>
+
+                    <button
+                      className={`display-device-btn ${displayMode === "external" ? "active" : ""}`}
+                      onClick={() => switchDisplay("external")}
+                      disabled={switchingDisplay}
+                    >
+                      <span className="device-icon">📺</span>
+                      <div className="display-device-text">
+                        <span className="device-name">TV</span>
+                        <span className="display-subtext">Segunda tela somente</span>
+                      </div>
+                      {displayMode === "external" && <span className="device-check">Ativo</span>}
+                    </button>
+                  </div>
+
+                  <div className="display-toggle-action">
+                    <button
+                      className="remote-btn highlight display-toggle-btn"
+                      onClick={() => switchDisplay("toggle")}
+                      disabled={switchingDisplay}
+                    >
+                      🔄 Alternar Tela ({displayMode === "external" ? "TV ➔ Tela do PC" : "PC ➔ TV"})
+                    </button>
+                  </div>
+                </div>
 
                 {/* Seção Mídia */}
                 <div className="remote-section">

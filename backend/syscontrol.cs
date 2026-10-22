@@ -151,6 +151,39 @@ namespace SysControl {
         [DllImport("powrprof.dll", SetLastError = true)]
         public static extern bool SetSuspendState(bool hibernate, bool forceCritical, bool disableWakeEvent);
 
+        [DllImport("user32.dll")]
+        public static extern int GetDisplayConfigBufferSizes(
+            uint flags,
+            out uint numPathArrayElements,
+            out uint numModeInfoArrayElements
+        );
+
+        [DllImport("user32.dll")]
+        public static extern int QueryDisplayConfig(
+            uint flags,
+            ref uint numPathArrayElements,
+            IntPtr pathArray,
+            ref uint numModeInfoArrayElements,
+            IntPtr modeInfoArray,
+            out uint currentTopologyId
+        );
+
+        [DllImport("user32.dll")]
+        public static extern int SetDisplayConfig(
+            uint numPathArrayElements,
+            IntPtr pathArray,
+            uint numModeInfoArrayElements,
+            IntPtr modeInfoArray,
+            uint flags
+        );
+
+        private const uint QDC_DATABASE_CURRENT = 0x00000004;
+        private const uint SDC_APPLY = 0x00000080;
+        private const uint SDC_TOPOLOGY_INTERNAL = 0x00000001;
+        private const uint SDC_TOPOLOGY_CLONE = 0x00000002;
+        private const uint SDC_TOPOLOGY_EXTEND = 0x00000004;
+        private const uint SDC_TOPOLOGY_EXTERNAL = 0x00000008;
+
         [StructLayout(LayoutKind.Sequential)]
         public struct POINT {
             public int X;
@@ -628,6 +661,95 @@ namespace SysControl {
             }
         }
 
+        static string GetCurrentDisplayTopology() {
+            try {
+                uint numPath = 0;
+                uint numMode = 0;
+                int r1 = GetDisplayConfigBufferSizes(QDC_DATABASE_CURRENT, out numPath, out numMode);
+                if (r1 == 0 && numPath > 0) {
+                    IntPtr pPaths = Marshal.AllocHGlobal((int)numPath * 72);
+                    IntPtr pModes = Marshal.AllocHGlobal((int)numMode * 64);
+                    uint top = 0;
+                    int r2 = QueryDisplayConfig(QDC_DATABASE_CURRENT, ref numPath, pPaths, ref numMode, pModes, out top);
+                    Marshal.FreeHGlobal(pPaths);
+                    Marshal.FreeHGlobal(pModes);
+
+                    if (r2 == 0) {
+                        if (top == 1) return "internal";
+                        if (top == 8) return "external";
+                        if (top == 4) return "extend";
+                        if (top == 2) return "clone";
+                    }
+                }
+            } catch { }
+            return "unknown";
+        }
+
+        static void PrintDisplayJson() {
+            string mode = GetCurrentDisplayTopology();
+            string label = "Desconhecido";
+            if (mode == "internal") label = "Tela do PC (Tela do computador somente)";
+            else if (mode == "external") label = "TV (Segunda tela somente)";
+            else if (mode == "extend") label = "Estender telas";
+            else if (mode == "clone") label = "Duplicar telas";
+
+            Console.WriteLine("{\"mode\":\"" + mode + "\",\"label\":\"" + EscapeJson(label) + "\"}");
+        }
+
+        static void SwitchDisplayViaDisplaySwitch(string arg) {
+            try {
+                string sysPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "DisplaySwitch.exe");
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = File.Exists(sysPath) ? sysPath : "DisplaySwitch.exe";
+                psi.Arguments = arg;
+                psi.CreateNoWindow = true;
+                psi.UseShellExecute = false;
+                Process p = Process.Start(psi);
+                if (p != null) {
+                    p.WaitForExit(3000);
+                }
+            } catch { }
+        }
+
+        static void SetDisplayMode(string target) {
+            string safeTarget = (target ?? "").ToLowerInvariant().Trim();
+            if (safeTarget == "pc") safeTarget = "internal";
+            if (safeTarget == "tv") safeTarget = "external";
+
+            uint topologyFlag = SDC_TOPOLOGY_INTERNAL;
+            string switchArg = "/internal";
+
+            if (safeTarget == "external") {
+                topologyFlag = SDC_TOPOLOGY_EXTERNAL;
+                switchArg = "/external";
+            } else if (safeTarget == "clone") {
+                topologyFlag = SDC_TOPOLOGY_CLONE;
+                switchArg = "/clone";
+            } else if (safeTarget == "extend") {
+                topologyFlag = SDC_TOPOLOGY_EXTEND;
+                switchArg = "/extend";
+            } else {
+                safeTarget = "internal";
+                topologyFlag = SDC_TOPOLOGY_INTERNAL;
+                switchArg = "/internal";
+            }
+
+            bool applied = false;
+            try {
+                int res = SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_APPLY | topologyFlag);
+                if (res == 0) {
+                    applied = true;
+                }
+            } catch { }
+
+            if (!applied) {
+                SwitchDisplayViaDisplaySwitch(switchArg);
+            }
+
+            Thread.Sleep(300);
+            PrintDisplayJson();
+        }
+
         static void ExecuteCommand(string[] args) {
             AttachToInteractiveDesktop();
 
@@ -665,6 +787,20 @@ namespace SysControl {
                         string devId = string.Join(" ", args, 1, args.Length - 1).Trim().Trim('"');
                         SetDefaultAudioDevice(devId);
                     }
+                    break;
+                case "getdisplay":
+                    PrintDisplayJson();
+                    break;
+                case "setdisplay":
+                    if (args.Length > 1) {
+                        SetDisplayMode(args[1]);
+                    } else {
+                        PrintDisplayJson();
+                    }
+                    break;
+                case "toggledisplay":
+                    string curTopology = GetCurrentDisplayTopology();
+                    SetDisplayMode(curTopology == "external" ? "internal" : "external");
                     break;
                 case "playpause":
                     PressKey(VK_MEDIA_PLAY_PAUSE, true);

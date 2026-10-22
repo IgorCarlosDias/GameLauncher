@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 import fs from 'fs'
 
@@ -26,7 +27,7 @@ export default defineConfig(({ mode }) => {
   const isAllowedIp = (rawIp = '') => {
     const clean = String(rawIp).replace(/^::ffff:/i, '').trim()
     if (!clean || clean === '127.0.0.1' || clean === '::1' || clean === 'localhost') return true
-    return clean.startsWith(subnetPrefix) || clean.startsWith('192.168.0.')
+    return clean.startsWith(subnetPrefix) || clean.startsWith('192.168.0.') || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(clean)
   }
 
   const subnetGuardPlugin = {
@@ -36,7 +37,7 @@ export default defineConfig(({ mode }) => {
         const remote = req.socket?.remoteAddress || ''
         if (!isAllowedIp(remote)) {
           res.statusCode = 403
-          res.end('Acesso negado: permitido apenas na sub-rede local (192.168.0.0/24).')
+          res.end('Acesso negado: permitido apenas na sub-rede local (192.168.0.0/24) ou Tailscale.')
           return
         }
         next()
@@ -47,7 +48,7 @@ export default defineConfig(({ mode }) => {
         const remote = req.socket?.remoteAddress || ''
         if (!isAllowedIp(remote)) {
           res.statusCode = 403
-          res.end('Acesso negado: permitido apenas na sub-rede local (192.168.0.0/24).')
+          res.end('Acesso negado: permitido apenas na sub-rede local (192.168.0.0/24) ou Tailscale.')
           return
         }
         next()
@@ -56,7 +57,51 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
-    plugins: [react(), subnetGuardPlugin],
+    plugins: [
+      react(),
+      subnetGuardPlugin,
+      VitePWA({
+        registerType: 'autoUpdate',
+        includeAssets: ['favicon.svg', 'gamepad.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
+        manifest: {
+          name: 'GameLauncher',
+          short_name: 'GameLauncher',
+          description: 'Central de jogos e controle remoto de TV',
+          theme_color: '#000000',
+          background_color: '#000000',
+          display: 'standalone',
+          orientation: 'any',
+          icons: [
+            {
+              src: '/pwa-192x192.png',
+              sizes: '192x192',
+              type: 'image/png',
+              purpose: 'any',
+            },
+            {
+              src: '/pwa-512x512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'any maskable',
+            },
+            {
+              src: '/gamepad.svg',
+              sizes: '192x192 512x512',
+              type: 'image/svg+xml',
+              purpose: 'any maskable',
+            },
+            {
+              src: '/favicon.svg',
+              sizes: '48x48 96x96',
+              type: 'image/svg+xml',
+            },
+          ],
+        },
+        workbox: {
+          globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+        },
+      }),
+    ],
     envDir: path.resolve(process.cwd(), '..'),
     define: {
       'import.meta.env.VITE_SERVER_IP': JSON.stringify(serverIp),
@@ -75,4 +120,3 @@ export default defineConfig(({ mode }) => {
     },
   }
 })
-

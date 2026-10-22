@@ -75,7 +75,13 @@ function isAllowedClientIp(rawIp) {
     return true;
   }
   const subnetPrefix = getAllowedSubnetPrefix();
-  return cleanIp.startsWith(subnetPrefix) || cleanIp.startsWith("192.168.0.");
+  const isTailscale = () => {
+    const match = cleanIp.match(/^100\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
+    if (!match) return false;
+    const second = parseInt(match[1], 10);
+    return second >= 64 && second <= 127;
+  };
+  return cleanIp.startsWith(subnetPrefix) || cleanIp.startsWith("192.168.0.") || isTailscale();
 }
 
 // 1. Filtro de Sub-rede (bloqueia qualquer IP fora de 192.168.0.0/24 e localhost)
@@ -85,22 +91,45 @@ app.use((req, res, next) => {
     console.warn(`[Segurança] Acesso bloqueado de IP fora da sub-rede autorizada: ${clientIp}`);
     return res.status(403).json({
       success: false,
-      message: "Acesso negado: dispositivo fora da sub-rede local autorizada (192.168.0.0/24).",
+      message: "Acesso negado: dispositivo fora da sub-rede local autorizada (192.168.0.0/24) ou da rede Tailscale.",
     });
   }
   next();
 });
 
 // 2. CORS restrito exclusivamente ao endereço do Frontend
-function getAllowedOrigins() {
-  const fePort = String(FRONTEND_PORT || "8060").trim();
-  const srvIp = String(SERVER_IP || "192.168.0.204").trim();
-  return new Set([
-    `http://${srvIp}:${fePort}`,
-    `http://localhost:${fePort}`,
-    `http://127.0.0.1:${fePort}`,
-  ]);
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  try {
+    const url = new URL(origin);
+    const fePort = String(FRONTEND_PORT || "8060").trim();
+    if (url.port && url.port !== fePort && url.port !== "8070" && url.port !== "8060") {
+      return false;
+    }
+    const host = url.hostname;
+    const srvIp = String(SERVER_IP || "192.168.0.204").trim();
+    const subnetPrefix = getAllowedSubnetPrefix();
+    const isTailscaleHost = () => {
+      const match = host.match(/^100\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
+      if (!match) return false;
+      const second = parseInt(match[1], 10);
+      return second >= 64 && second <= 127;
+    };
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      host === srvIp ||
+      host.startsWith(subnetPrefix) ||
+      host.startsWith("192.168.0.") ||
+      isTailscaleHost() ||
+      host.endsWith(".ts.net")
+    );
+  } catch {
+    return false;
+  }
 }
+
 
 app.use(
   cors({
@@ -108,8 +137,8 @@ app.use(
       // Requisições sem header Origin (ex: imagens estáticas ou chamadas diretas locais)
       // passam pelo CORS mas são barradas pelo requireApiToken nas rotas protegidas
       if (!origin) return callback(null, true);
-      const allowed = getAllowedOrigins();
-      if (allowed.has(origin)) {
+
+      if (isAllowedOrigin(origin)) {
         return callback(null, true);
       }
       console.warn(`[Segurança] Origem CORS bloqueada: ${origin}`);
@@ -187,7 +216,7 @@ app.use((req, res, next) => {
 
 // Logger de requisições (ignora spam de mousemove e polling frequente no console)
 app.use((req, res, next) => {
-  if (req.url !== "/system/mouse" && req.url !== "/system/active-game" && req.url !== "/system/stats") {
+  if (req.url !== "/system/mouse" && req.url !== "/system/active-game" && req.url !== "/system/stats" && req.url !== "/system/display") {
     console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
   }
   next();
@@ -220,6 +249,9 @@ const ALLOWED_SYSCONTROL_ACTIONS = new Set([
   "setvol",
   "getaudiodevices",
   "setaudiodevice",
+  "getdisplay",
+  "setdisplay",
+  "toggledisplay",
   "playpause",
   "next",
   "prev",
@@ -3089,6 +3121,64 @@ app.post("/system/audio/device", async (req, res) => {
       devices = JSON.parse(devRaw);
     } catch {}
     res.json({ success: true, devices });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Status da Tela / Modo de exibição atual (Tela do PC vs TV)
+app.get("/system/display", async (req, res) => {
+  try {
+    const raw = await runSysControl("getdisplay");
+    let displayData = { mode: "internal", label: "Tela do PC" };
+    try {
+      if (raw && raw.trim().startsWith("{")) {
+        displayData = JSON.parse(raw.trim());
+      }
+    } catch {}
+    res.json({
+      success: true,
+      mode: displayData.mode || "internal",
+      label: displayData.label || "Tela do PC",
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Alternar ou definir tela (Tela do computador somente <-> Segunda tela somente)
+app.post("/system/display", async (req, res) => {
+  const { mode } = req.body || {};
+  const safeMode = String(mode || "toggle").toLowerCase().trim();
+
+  try {
+    let out = "";
+    if (safeMode === "toggle") {
+      out = await runSysControl("toggledisplay");
+    } else if (["internal", "external", "clone", "extend", "pc", "tv"].includes(safeMode)) {
+      const target = safeMode === "tv" ? "external" : safeMode === "pc" ? "internal" : safeMode;
+      out = await runSysControl("setdisplay", target);
+      const switchArg = target === "external" ? "/external" : "/internal";
+      execFile("DisplaySwitch.exe", [switchArg], { windowsHide: true }, () => {});
+    } else {
+      return res.status(400).json({ success: false, message: "Modo de tela inválido" });
+    }
+
+    let parsed = null;
+    try {
+      if (out && out.trim().startsWith("{")) {
+        parsed = JSON.parse(out.trim());
+      }
+    } catch {}
+
+    const resolvedMode = parsed?.mode || (safeMode === "tv" ? "external" : safeMode === "pc" ? "internal" : safeMode);
+    const label = parsed?.label || (resolvedMode === "external" ? "TV (Segunda tela somente)" : "Tela do PC (Tela do computador somente)");
+
+    res.json({
+      success: true,
+      mode: resolvedMode,
+      label,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
