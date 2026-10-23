@@ -1066,6 +1066,22 @@ img {
   color: var(--text-secondary);
 }
 
+.game-card__trophy,
+.game-row__trophy {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+.game-card__trophy.is-active,
+.game-row__trophy.is-active {
+  color: #fbbf24;
+}
+
 .game-card__more {
   position: absolute;
   bottom: 8px;

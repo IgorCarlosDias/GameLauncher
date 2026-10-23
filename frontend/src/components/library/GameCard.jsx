@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { Clock, Gamepad2, Loader2, MoreHorizontal, Star } from "lucide-react";
+import { Clock, Gamepad2, Loader2, MoreHorizontal, Star, Trophy } from "lucide-react";
 import PlatformBadge from "../ui/PlatformBadge";
 import { coverUrl } from "../../api";
 import { getPlatform } from "../../lib/games";
@@ -81,8 +81,19 @@ function GameCard({ game, running, launching, variant = "grid", onLaunch, onOpen
         <span className="game-card__info">
           <strong className="game-card__title">{game.name}</strong>
           <span className="game-card__meta">
-            <Clock size={11} aria-hidden="true" />
-            {playTime || "Nunca jogado"}
+            <span>
+              <Clock size={11} aria-hidden="true" />
+              {playTime || "Nunca jogado"}
+            </span>
+            {game.achievementsTotal > 0 && (
+              <span
+                className={`game-card__trophy${game.achievementsUnlocked > 0 ? " is-active" : ""}`}
+                title={`Conquistas: ${game.achievementsUnlocked || 0} de ${game.achievementsTotal}`}
+              >
+                <Trophy size={11} aria-hidden="true" />
+                {game.achievementsUnlocked || 0}/{game.achievementsTotal}
+              </span>
+            )}
           </span>
         </span>
 

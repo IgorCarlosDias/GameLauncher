@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { Clock, Gamepad2, Loader2, MoreHorizontal, Play, Star } from "lucide-react";
+import { Clock, Gamepad2, Loader2, MoreHorizontal, Play, Star, Trophy } from "lucide-react";
 import PlatformBadge from "../ui/PlatformBadge";
 import { coverUrl } from "../../api";
 import { getPlatform } from "../../lib/games";
@@ -36,6 +36,15 @@ function GameRow({ game, running, launching, onLaunch, onOpenActions }) {
             <span>
               <Clock size={11} aria-hidden="true" /> {playTime || "Nunca jogado"}
             </span>
+            {game.achievementsTotal > 0 && (
+              <span
+                className={`game-row__trophy${game.achievementsUnlocked > 0 ? " is-active" : ""}`}
+                title={`Conquistas: ${game.achievementsUnlocked || 0} de ${game.achievementsTotal}`}
+              >
+                <Trophy size={11} aria-hidden="true" />
+                {game.achievementsUnlocked || 0}/{game.achievementsTotal}
+              </span>
+            )}
             {running && <span className="game-row__live">Em jogo</span>}
           </span>
         </span>

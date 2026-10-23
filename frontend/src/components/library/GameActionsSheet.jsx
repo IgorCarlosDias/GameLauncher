@@ -66,7 +66,18 @@ export default function GameActionsSheet({
               onClick={act(onFavorite)}
             />
             <Action icon={Pencil} label="Editar jogo" hint="Nome, capa e Steam AppID" onClick={act(onEdit)} />
-            {current.steamId && <Action icon={Trophy} label="Conquistas" hint="Locais e Steam" onClick={act(onAchievements)} />}
+            {(current.steamId || current.achievementsTotal > 0) && (
+              <Action
+                icon={Trophy}
+                label="Conquistas"
+                hint={
+                  current.achievementsTotal > 0
+                    ? `${current.achievementsUnlocked || 0} de ${current.achievementsTotal} desbloqueadas`
+                    : "Ver e sincronizar conquistas"
+                }
+                onClick={act(onAchievements)}
+              />
+            )}
             {running && (
               <>
                 <Action icon={XSquare} label="Fechar janela" hint="Envia Alt+F4" onClick={act(onSoftClose)} />

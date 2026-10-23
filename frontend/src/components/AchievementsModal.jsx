@@ -59,6 +59,7 @@ export default function AchievementsModal({
             unlocked: res.data.unlocked || 0,
             percentage: res.data.percentage || 0,
             achievements: res.data.achievements || [],
+            steamId: res.data.steamId || null,
             hasApiKey: res.data.hasApiKey !== false,
             warning: res.data.warning || null,
           });
@@ -175,9 +176,13 @@ export default function AchievementsModal({
               </div>
             )}
             <div className="achievements-game-meta">
-              <span className="achievements-tag">CONQUISTAS STEAM</span>
+              <span className="achievements-tag">
+                {game.extension === ".url" ? "CONQUISTAS STEAM" : "CONQUISTAS (JOGO LOCAL)"}
+              </span>
               <h2 title={game.name}>{game.name}</h2>
-              <span className="achievements-appid">AppID {game.steamId}</span>
+              {(data.steamId || game.steamId) && (
+                <span className="achievements-appid">AppID {data.steamId || game.steamId}</span>
+              )}
             </div>
           </div>
           <button
@@ -232,8 +237,8 @@ export default function AchievementsModal({
               type="button"
               className={`btn-sync-achievements ${syncing ? "spinning" : ""}`}
               onClick={handleSync}
-              disabled={syncing || !game.steamId}
-              title="Sincronizar com a Steam"
+              disabled={syncing || !(data.steamId || game.steamId)}
+              title="Sincronizar conquistas"
             >
               <RotateCcw size={14} className={syncing ? "spin" : ""} />
               <span>{syncing ? "Sincronizando..." : "Sincronizar"}</span>
@@ -313,7 +318,7 @@ export default function AchievementsModal({
                 type="button"
                 className="btn btn-primary"
                 onClick={handleSync}
-                disabled={syncing || !game.steamId}
+                disabled={syncing || !(data.steamId || game.steamId)}
               >
                 <RotateCcw size={16} /> Sincronizar Agora
               </button>

@@ -12,9 +12,9 @@ export const SORTS = [
   { id: "az", label: "Nome (A–Z)" },
 ];
 
-/** Steam = tem steamId ou é atalho de internet (.url). Todo o resto é jogo local. */
+/** Steam = atalho de internet da Steam (.url). Todo o resto é jogo local (.lnk ou .exe). */
 export function getPlatform(game) {
-  return game?.steamId || game?.extension === ".url" ? "steam" : "local";
+  return game?.extension === ".url" ? "steam" : "local";
 }
 
 const collator = new Intl.Collator("pt-BR", { sensitivity: "base" });

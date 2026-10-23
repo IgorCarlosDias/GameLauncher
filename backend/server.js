@@ -808,7 +808,10 @@ function detectLocalSteamAppId(targetPath) {
       const candidates = [
         path.join(dir, "steam_appid.txt"),
         path.join(dir, "steam_emu.ini"),
+        path.join(dir, "steam_api64.ini"),
+        path.join(dir, "steam_api.ini"),
         path.join(dir, "steam_settings", "steam_appid.txt"),
+        path.join(dir, "steam_settings", "steam_api64.ini"),
       ];
       for (const c of candidates) {
         if (fs.existsSync(c)) {
@@ -826,17 +829,23 @@ function detectLocalSteamAppId(targetPath) {
       }
     }
 
-    // 2. Busca em subpastas diretas (até 2 níveis: Binaries/Win64, Engine, etc.)
+    // 2. Busca recursiva em subpastas diretas (até 4 níveis: Binaries/Win64, Engine, etc.)
     const checkSubdirs = (parentDir, depth = 0) => {
-      if (depth > 2 || !fs.existsSync(parentDir)) return null;
+      if (depth > 4 || !fs.existsSync(parentDir)) return null;
       try {
         const entries = fs.readdirSync(parentDir, { withFileTypes: true });
         for (const ent of entries) {
           if (ent.isFile()) {
-            if (ent.name === "steam_appid.txt" || ent.name === "steam_emu.ini") {
+            const lowerName = ent.name.toLowerCase();
+            if (
+              lowerName === "steam_appid.txt" ||
+              lowerName === "steam_emu.ini" ||
+              lowerName === "steam_api64.ini" ||
+              lowerName === "steam_api.ini"
+            ) {
               const full = path.join(parentDir, ent.name);
               const content = fs.readFileSync(full, "latin1");
-              if (ent.name.endsWith(".txt")) {
+              if (lowerName.endsWith(".txt")) {
                 const m = content.match(/\b(\d{3,9})\b/);
                 if (m) return m[1];
               } else {
@@ -844,7 +853,10 @@ function detectLocalSteamAppId(targetPath) {
                 if (m) return m[1];
               }
             }
-          } else if (ent.isDirectory() && !["node_modules", ".git", "$RECYCLE.BIN"].includes(ent.name)) {
+          } else if (
+            ent.isDirectory() &&
+            !["node_modules", ".git", "$recycle.bin", "saved", "intermediate", "temp"].includes(ent.name.toLowerCase())
+          ) {
             const found = checkSubdirs(path.join(parentDir, ent.name), depth + 1);
             if (found) return found;
           }
@@ -2904,10 +2916,16 @@ app.get("/games/:id/achievements", async (req, res) => {
       return res.status(404).json({ success: false, message: "Jogo não encontrado" });
     }
 
+    let targetExePath = game.file;
+    if (game.extension === ".lnk") {
+      const sc = await resolveShortcut(game.file);
+      if (sc && sc.target) targetExePath = sc.target;
+    }
+
     // Auto-detecta Steam AppID local se não configurado
     let effectiveSteamId = game.steamId;
     if (!effectiveSteamId) {
-      effectiveSteamId = detectLocalSteamAppId(game.resolvedExe || game.file);
+      effectiveSteamId = detectLocalSteamAppId(targetExePath);
       if (effectiveSteamId) {
         game.steamId = effectiveSteamId;
         await dbRun(`UPDATE games SET steam_id = ? WHERE id = ?`, [effectiveSteamId, game.id]);
@@ -2926,7 +2944,7 @@ app.get("/games/:id/achievements", async (req, res) => {
           effectiveSteamId,
           steamKey,
           steamId64,
-          game.resolvedExe || game.file
+          targetExePath
         );
       } catch (syncErr) {
         console.warn(`[Achievements] Auto-sync para jogo ${game.name} falhou:`, syncErr.message);
@@ -2955,10 +2973,16 @@ app.post("/games/:id/sync-achievements", async (req, res) => {
       return res.status(404).json({ success: false, message: "Jogo não encontrado" });
     }
 
+    let targetExePath = game.file;
+    if (game.extension === ".lnk") {
+      const sc = await resolveShortcut(game.file);
+      if (sc && sc.target) targetExePath = sc.target;
+    }
+
     // Auto-detecta Steam AppID local se não configurado
     let effectiveSteamId = game.steamId;
     if (!effectiveSteamId) {
-      effectiveSteamId = detectLocalSteamAppId(game.resolvedExe || game.file);
+      effectiveSteamId = detectLocalSteamAppId(targetExePath);
       if (effectiveSteamId) {
         game.steamId = effectiveSteamId;
         await dbRun(`UPDATE games SET steam_id = ? WHERE id = ?`, [effectiveSteamId, game.id]);
@@ -2987,7 +3011,7 @@ app.post("/games/:id/sync-achievements", async (req, res) => {
       effectiveSteamId,
       steamKey,
       steamId64,
-      game.resolvedExe || game.file
+      targetExePath
     );
 
     res.json({
