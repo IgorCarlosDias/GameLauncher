@@ -87,6 +87,28 @@ async function initDatabase() {
       value TEXT
     )
   `);
+
+  await dbRun(`
+    CREATE TABLE IF NOT EXISTS achievements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      game_id INTEGER NOT NULL,
+      steam_id TEXT NOT NULL,
+      api_name TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      icon_url TEXT,
+      icon_gray_url TEXT,
+      hidden INTEGER DEFAULT 0,
+      achieved INTEGER DEFAULT 0,
+      unlock_time INTEGER DEFAULT 0,
+      updated_at TEXT,
+      FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE,
+      UNIQUE(game_id, api_name)
+    )
+  `);
+
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_achievements_game_id ON achievements(game_id)`);
+  await dbRun(`CREATE INDEX IF NOT EXISTS idx_achievements_steam_id ON achievements(steam_id)`);
 }
 
 module.exports = {

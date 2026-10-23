@@ -14,6 +14,18 @@ const axios = require("axios");
 const { getGameCover, searchGameCovers, testSteamGridDbKey } = require("./services/steamgriddb");
 const supabaseSync = require("./services/supabaseSync");
 const { dbRun, dbGet, dbAll, initDatabase } = require("./database");
+// Helper para carregar serviço de conquistas com resolução dinâmica sem travar em cache antigo
+const getSteamAchievementsService = () => {
+  try {
+    const servicePath = require.resolve("./services/steamAchievements");
+    delete require.cache[servicePath];
+  } catch {}
+  return require("./services/steamAchievements");
+};
+const detectLocalSteamUser = (...args) => getSteamAchievementsService().detectLocalSteamUser(...args);
+const testSteamApiKey = (...args) => getSteamAchievementsService().testSteamApiKey(...args);
+const getGameAchievementsFromDb = (...args) => getSteamAchievementsService().getGameAchievementsFromDb(...args);
+const syncGameAchievements = (...args) => getSteamAchievementsService().syncGameAchievements(...args);
 
 
 let ws = null;
@@ -770,6 +782,84 @@ function discoverGameExecutables(targetPath, fallbackExe) {
   return result;
 }
 
+/**
+ * Detecta automaticamente o Steam AppID de jogos locais
+ * inspecionando steam_appid.txt e steam_emu.ini (RUNE, CODEX, Goldberg, Tenoke, etc.)
+ */
+function detectLocalSteamAppId(targetPath) {
+  if (!targetPath || typeof targetPath !== "string") return null;
+  try {
+    if (!fs.existsSync(targetPath)) return null;
+    const startDir = fs.statSync(targetPath).isDirectory() ? targetPath : path.dirname(targetPath);
+    const dirs = [startDir];
+    let cur = startDir;
+
+    // Sobe até 2 níveis para pegar diretórios pai (ex.: SparkingZERO/Binaries/Win64 -> raiz do jogo)
+    for (let i = 0; i < 2; i++) {
+      const parent = path.dirname(cur);
+      if (parent && parent !== cur && path.dirname(parent) !== parent) {
+        dirs.push(parent);
+        cur = parent;
+      }
+    }
+
+    // 1. Busca em startDir e pastas pai imediatas
+    for (const dir of dirs) {
+      const candidates = [
+        path.join(dir, "steam_appid.txt"),
+        path.join(dir, "steam_emu.ini"),
+        path.join(dir, "steam_settings", "steam_appid.txt"),
+      ];
+      for (const c of candidates) {
+        if (fs.existsSync(c)) {
+          try {
+            const content = fs.readFileSync(c, "latin1");
+            if (c.endsWith(".txt")) {
+              const m = content.match(/\b(\d{3,9})\b/);
+              if (m) return m[1];
+            } else if (c.endsWith(".ini")) {
+              const m = content.match(/AppId\s*=\s*(\d+)/i);
+              if (m) return m[1];
+            }
+          } catch {}
+        }
+      }
+    }
+
+    // 2. Busca em subpastas diretas (até 2 níveis: Binaries/Win64, Engine, etc.)
+    const checkSubdirs = (parentDir, depth = 0) => {
+      if (depth > 2 || !fs.existsSync(parentDir)) return null;
+      try {
+        const entries = fs.readdirSync(parentDir, { withFileTypes: true });
+        for (const ent of entries) {
+          if (ent.isFile()) {
+            if (ent.name === "steam_appid.txt" || ent.name === "steam_emu.ini") {
+              const full = path.join(parentDir, ent.name);
+              const content = fs.readFileSync(full, "latin1");
+              if (ent.name.endsWith(".txt")) {
+                const m = content.match(/\b(\d{3,9})\b/);
+                if (m) return m[1];
+              } else {
+                const m = content.match(/AppId\s*=\s*(\d+)/i);
+                if (m) return m[1];
+              }
+            }
+          } else if (ent.isDirectory() && !["node_modules", ".git", "$RECYCLE.BIN"].includes(ent.name)) {
+            const found = checkSubdirs(path.join(parentDir, ent.name), depth + 1);
+            if (found) return found;
+          }
+        }
+      } catch {}
+      return null;
+    };
+
+    const rootDir = dirs[dirs.length - 1] || startDir;
+    return checkSubdirs(startDir) || checkSubdirs(rootDir);
+  } catch {
+    return null;
+  }
+}
+
 // =========================
 // PERSISTÊNCIA, EXPORTAÇÃO E IMPORTAÇÃO DE TEMPOS EM JSON (playtime.json)
 // =========================
@@ -1032,6 +1122,8 @@ function persistEnvFiles({
   frontendPort,
   gameFolder,
   steamGridDbKey,
+  steamApiKey,
+  steamUserId,
   supabaseUrl,
   supabaseKey,
   supabaseEmail,
@@ -1048,6 +1140,14 @@ function persistEnvFiles({
     steamGridDbKey !== undefined && String(steamGridDbKey).trim() !== ""
       ? steamGridDbKey
       : process.env.STEAMGRIDDB_KEY || ""
+  );
+  const cleanSteamApiKey = sanitizeEnvValue(
+    steamApiKey !== undefined && String(steamApiKey).trim() !== ""
+      ? steamApiKey
+      : (steamApiKey === "" ? "" : process.env.STEAM_API_KEY || "")
+  );
+  const cleanSteamUserId = sanitizeEnvValue(
+    steamUserId !== undefined ? steamUserId : process.env.STEAM_USER_ID || ""
   );
   const cleanSupabaseUrl = sanitizeEnvValue(
     supabaseUrl !== undefined ? supabaseUrl : process.env.SUPABASE_URL || ""
@@ -1094,6 +1194,10 @@ function persistEnvFiles({
     `GAME_FOLDER=${cleanFolder}`,
     `STEAMGRIDDB_KEY=${cleanKey}`,
     "",
+    "# Integracao Steam Web API (Conquistas e Estatisticas)",
+    `STEAM_API_KEY=${cleanSteamApiKey}`,
+    `STEAM_USER_ID=${cleanSteamUserId}`,
+    "",
     "# Supabase Cloud Sync",
     `SUPABASE_URL=${cleanSupabaseUrl}`,
     `SUPABASE_KEY=${cleanSupabaseKey}`,
@@ -1108,6 +1212,8 @@ function persistEnvFiles({
 
   const backendEnvContent = [
     `STEAMGRIDDB_KEY=${cleanKey}`,
+    `STEAM_API_KEY=${cleanSteamApiKey}`,
+    `STEAM_USER_ID=${cleanSteamUserId}`,
     `SERVER_IP=${cleanIp}`,
     `PORT=${cleanPort}`,
     `FRONTEND_PORT=${cleanFrontendPort}`,
@@ -1140,6 +1246,8 @@ function persistEnvFiles({
   process.env.FRONTEND_PORT = cleanFrontendPort;
   process.env.GAME_FOLDER = cleanFolder;
   process.env.STEAMGRIDDB_KEY = cleanKey;
+  process.env.STEAM_API_KEY = cleanSteamApiKey;
+  process.env.STEAM_USER_ID = cleanSteamUserId;
   process.env.SUPABASE_URL = cleanSupabaseUrl;
   process.env.SUPABASE_KEY = cleanSupabaseKey;
   process.env.SUPABASE_EMAIL = cleanSupabaseEmail;
@@ -1163,6 +1271,9 @@ function persistEnvFiles({
     gameFolder: cleanFolder,
     hasSteamGridDbKey: Boolean(cleanKey),
     steamGridDbKeyHint: maskSecretHint(cleanKey),
+    hasSteamApiKey: Boolean(cleanSteamApiKey),
+    steamApiKeyHint: maskSecretHint(cleanSteamApiKey),
+    steamUserId: cleanSteamUserId,
     supabaseUrl: cleanSupabaseUrl,
     hasSupabaseKey: Boolean(cleanSupabaseKey),
     supabaseKeyHint: maskSecretHint(cleanSupabaseKey),
@@ -1733,6 +1844,7 @@ async function loadGames() {
         if (sc && sc.target) {
           candidateExes = discoverGameExecutables(sc.target, path.basename(sc.target));
           resolvedExe = candidateExes[0] || path.basename(sc.target);
+          steamId = detectLocalSteamAppId(sc.target);
         } else {
           resolvedExe = rawName + ".exe";
           candidateExes = [resolvedExe];
@@ -1748,6 +1860,7 @@ async function loadGames() {
       } else {
         candidateExes = discoverGameExecutables(file, path.basename(file));
         resolvedExe = candidateExes[0] || path.basename(file);
+        steamId = detectLocalSteamAppId(file);
       }
 
       // Verifica se já existe no banco SQLite (por path ou por nome caso a pasta tenha mudado)
@@ -1776,15 +1889,16 @@ async function loadGames() {
         );
         dbRow = await dbGet("SELECT * FROM games WHERE id = ?", [insertRes.lastID]);
       } else {
+        const finalSteamId = dbRow.steam_id || steamId;
         await dbRun(
           `UPDATE games SET name = ?, extension = ?, cover = ?, resolved_exe = ?, steam_id = ? WHERE id = ?`,
-          [rawName, ext, cover, resolvedExe, steamId, dbRow.id]
+          [rawName, ext, cover, resolvedExe, finalSteamId, dbRow.id]
         );
         dbRow.name = rawName;
         dbRow.extension = ext;
         dbRow.cover = cover;
         dbRow.resolved_exe = resolvedExe;
-        dbRow.steam_id = steamId;
+        dbRow.steam_id = finalSteamId;
       }
 
       // Integra tempo de jogo e última sessão da Steam caso o jogo tenha steam_id
@@ -2203,20 +2317,33 @@ app.get("/", (req, res) => {
 app.get("/games", async (req, res) => {
   await syncSteamPlaytimesInMemory();
 
+  const achRows = await dbAll(
+    "SELECT game_id, COUNT(*) AS total, SUM(CASE WHEN achieved = 1 THEN 1 ELSE 0 END) AS unlocked FROM achievements GROUP BY game_id"
+  ).catch(() => []);
+  const achMap = new Map(
+    achRows.map((r) => [r.game_id, { total: r.total || 0, unlocked: r.unlocked || 0 }])
+  );
+
   res.json(
-    games.map((game) => ({
-      id: game.id,
-      name: game.name,
-      originalName: game.originalName,
-      customName: game.customName,
-      cover: game.cover,
-      extension: game.extension,
-      resolvedExe: game.resolvedExe,
-      playTime: game.playTime,
-      playCount: game.playCount,
-      favorite: game.favorite,
-      lastPlayed: game.lastPlayed,
-    }))
+    games.map((game) => {
+      const ach = achMap.get(game.id) || { total: 0, unlocked: 0 };
+      return {
+        id: game.id,
+        name: game.name,
+        originalName: game.originalName,
+        customName: game.customName,
+        cover: game.cover,
+        extension: game.extension,
+        resolvedExe: game.resolvedExe,
+        steamId: game.steamId || null,
+        playTime: game.playTime,
+        playCount: game.playCount,
+        favorite: game.favorite,
+        lastPlayed: game.lastPlayed,
+        achievementsTotal: ach.total,
+        achievementsUnlocked: ach.unlocked,
+      };
+    })
   );
 });
 
@@ -2353,6 +2480,9 @@ app.get("/settings", async (req, res) => {
     const folderCheck = inspectGameFolder(GAME_FOLDER);
     const networkInterfaces = getLocalNetworkAddresses();
     const steamGridDbKey = (process.env.STEAMGRIDDB_KEY || "").trim();
+    const steamApiKey = (process.env.STEAM_API_KEY || "").trim();
+    const steamUserId = (process.env.STEAM_USER_ID || "").trim();
+    const detectedSteam = detectLocalSteamUser();
     const supabaseKey = (process.env.SUPABASE_KEY || "").trim();
     const supabasePassword = (process.env.SUPABASE_PASSWORD || "").trim();
 
@@ -2367,6 +2497,9 @@ app.get("/settings", async (req, res) => {
         gameFolder: GAME_FOLDER || "",
         hasSteamGridDbKey: Boolean(steamGridDbKey),
         steamGridDbKeyHint: maskSecretHint(steamGridDbKey),
+        hasSteamApiKey: Boolean(steamApiKey),
+        steamApiKeyHint: maskSecretHint(steamApiKey),
+        steamUserId: steamUserId || detectedSteam.steamId64 || "",
         supabaseUrl: process.env.SUPABASE_URL || "",
         hasSupabaseKey: Boolean(supabaseKey),
         supabaseKeyHint: maskSecretHint(supabaseKey),
@@ -2374,6 +2507,12 @@ app.get("/settings", async (req, res) => {
         hasSupabasePassword: Boolean(supabasePassword),
         hasApiToken: Boolean(API_TOKEN),
         apiTokenHint: maskSecretHint(API_TOKEN),
+      },
+      steam: {
+        hasApiKey: Boolean(steamApiKey),
+        apiKeyHint: maskSecretHint(steamApiKey),
+        steamUserId: steamUserId || detectedSteam.steamId64 || "",
+        detected: detectedSteam,
       },
       supabase: {
         url: process.env.SUPABASE_URL || "",
@@ -2425,6 +2564,44 @@ app.post("/settings/test-steamgriddb", async (req, res) => {
       typeof req.body?.steamGridDbKey === "string" ? req.body.steamGridDbKey.trim() : "";
     const candidateKey = rawCandidate || process.env.STEAMGRIDDB_KEY || "";
     const result = await testSteamGridDbKey(candidateKey);
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      valid: false,
+      message: error.message,
+    });
+  }
+});
+
+app.post("/settings/detect-steam", (req, res) => {
+  try {
+    const detected = detectLocalSteamUser();
+    res.json({
+      success: true,
+      ...detected,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Erro detectando usuário da Steam: " + error.message,
+    });
+  }
+});
+
+app.post("/settings/test-steam", async (req, res) => {
+  try {
+    const rawCandidate =
+      typeof req.body?.steamApiKey === "string" ? req.body.steamApiKey.trim() : "";
+    const candidateKey = rawCandidate || process.env.STEAM_API_KEY || "";
+
+    const rawId = typeof req.body?.steamUserId === "string" ? req.body.steamUserId.trim() : "";
+    const candidateId = rawId || process.env.STEAM_USER_ID || detectLocalSteamUser().steamId64;
+
+    const result = await testSteamApiKey(candidateKey, candidateId);
     res.json({
       success: true,
       ...result,
@@ -2528,6 +2705,8 @@ app.put("/settings", async (req, res) => {
         envInput.frontendPort !== undefined ? envInput.frontendPort : FRONTEND_PORT,
       gameFolder: envInput.gameFolder !== undefined ? envInput.gameFolder : GAME_FOLDER,
       steamGridDbKey: envInput.steamGridDbKey,
+      steamApiKey: envInput.steamApiKey,
+      steamUserId: envInput.steamUserId,
       supabaseUrl:
         envInput.supabaseUrl !== undefined
           ? envInput.supabaseUrl
@@ -2635,7 +2814,7 @@ app.get("/games/:id/covers", async (req, res) => {
   });
 });
 
-// Editar nome de exibição, tempo de jogo e/ou trocar capa do jogo
+// Editar nome de exibição, tempo de jogo, AppID da Steam e/ou trocar capa do jogo
 app.put("/games/:id", async (req, res) => {
   const id = parseInt(req.params.id, 10);
   const game = games.find((g) => g.id === id);
@@ -2643,7 +2822,7 @@ app.put("/games/:id", async (req, res) => {
     return res.status(404).json({ success: false, message: "Jogo não encontrado" });
   }
 
-  const { customName, coverUrl, playTime } = req.body || {};
+  const { customName, coverUrl, playTime, steamId } = req.body || {};
 
   try {
     if (typeof customName === "string") {
@@ -2651,6 +2830,23 @@ app.put("/games/:id", async (req, res) => {
       game.customName = trimmed;
       game.name = trimmed || game.originalName;
       await dbRun(`UPDATE games SET custom_name = ? WHERE id = ?`, [trimmed || null, id]);
+    }
+
+    if (steamId !== undefined) {
+      const cleanedSteamId = steamId ? String(steamId).trim().replace(/\D/g, "") : null;
+      game.steamId = cleanedSteamId || null;
+      await dbRun(`UPDATE games SET steam_id = ? WHERE id = ?`, [game.steamId, id]);
+
+      // Se configurou um steam_id e temos chave de API, dispara sincronização em background
+      if (game.steamId && process.env.STEAM_API_KEY) {
+        syncGameAchievements(
+          game.id,
+          game.steamId,
+          process.env.STEAM_API_KEY,
+          process.env.STEAM_USER_ID,
+          game.resolvedExe || game.file
+        ).catch(() => {});
+      }
     }
 
     if (playTime !== undefined && playTime !== null && playTime !== "") {
@@ -2692,6 +2888,179 @@ app.put("/games/:id", async (req, res) => {
       success: false,
       message: error.message,
     });
+  }
+});
+
+// =========================
+// CONQUISTAS (STEAM & JOGOS LOCAIS / EMULADORES)
+// =========================
+
+// Retorna conquistas de um jogo (busca do SQLite e auto-sincroniza se vazio e com chave)
+app.get("/games/:id/achievements", async (req, res) => {
+  try {
+    const gameId = parseInt(req.params.id, 10);
+    const game = games.find((g) => g.id === gameId);
+    if (!game) {
+      return res.status(404).json({ success: false, message: "Jogo não encontrado" });
+    }
+
+    // Auto-detecta Steam AppID local se não configurado
+    let effectiveSteamId = game.steamId;
+    if (!effectiveSteamId) {
+      effectiveSteamId = detectLocalSteamAppId(game.resolvedExe || game.file);
+      if (effectiveSteamId) {
+        game.steamId = effectiveSteamId;
+        await dbRun(`UPDATE games SET steam_id = ? WHERE id = ?`, [effectiveSteamId, game.id]);
+      }
+    }
+
+    let data = await getGameAchievementsFromDb(gameId);
+
+    const steamKey = (process.env.STEAM_API_KEY || "").trim();
+    if (data.total === 0 && effectiveSteamId && steamKey) {
+      try {
+        const steamId64 =
+          (process.env.STEAM_USER_ID || "").trim() || detectLocalSteamUser().steamId64;
+        data = await syncGameAchievements(
+          gameId,
+          effectiveSteamId,
+          steamKey,
+          steamId64,
+          game.resolvedExe || game.file
+        );
+      } catch (syncErr) {
+        console.warn(`[Achievements] Auto-sync para jogo ${game.name} falhou:`, syncErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      gameId: game.id,
+      gameName: game.name,
+      steamId: effectiveSteamId || null,
+      hasApiKey: Boolean(process.env.STEAM_API_KEY),
+      ...data,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Sincroniza forçadamente as conquistas de um jogo (Steam oficial e emuladores locais)
+app.post("/games/:id/sync-achievements", async (req, res) => {
+  try {
+    const gameId = parseInt(req.params.id, 10);
+    const game = games.find((g) => g.id === gameId);
+    if (!game) {
+      return res.status(404).json({ success: false, message: "Jogo não encontrado" });
+    }
+
+    // Auto-detecta Steam AppID local se não configurado
+    let effectiveSteamId = game.steamId;
+    if (!effectiveSteamId) {
+      effectiveSteamId = detectLocalSteamAppId(game.resolvedExe || game.file);
+      if (effectiveSteamId) {
+        game.steamId = effectiveSteamId;
+        await dbRun(`UPDATE games SET steam_id = ? WHERE id = ?`, [effectiveSteamId, game.id]);
+      }
+    }
+
+    if (!effectiveSteamId) {
+      return res.status(400).json({
+        success: false,
+        message: "Este jogo não possui Steam AppID associado. Informe o AppID na edição do jogo.",
+      });
+    }
+
+    const steamKey = (process.env.STEAM_API_KEY || "").trim();
+    if (!steamKey) {
+      return res.status(400).json({
+        success: false,
+        message: "Chave da API Steam não configurada. Adicione-a na página de Configurações.",
+      });
+    }
+
+    const steamId64 =
+      (process.env.STEAM_USER_ID || "").trim() || detectLocalSteamUser().steamId64;
+    const result = await syncGameAchievements(
+      gameId,
+      effectiveSteamId,
+      steamKey,
+      steamId64,
+      game.resolvedExe || game.file
+    );
+
+    res.json({
+      success: true,
+      gameId: game.id,
+      gameName: game.name,
+      ...result,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Sincroniza conquistas de todos os jogos da biblioteca que tenham steamId ou detecção local
+app.post("/steam/sync-all-achievements", async (req, res) => {
+  try {
+    const steamKey = (process.env.STEAM_API_KEY || "").trim();
+    if (!steamKey) {
+      return res.status(400).json({
+        success: false,
+        message: "Chave da API Steam não configurada. Adicione-a na página de Configurações.",
+      });
+    }
+
+    const candidateGames = games.filter((g) => {
+      if (g.steamId) return true;
+      const detected = detectLocalSteamAppId(g.resolvedExe || g.file);
+      if (detected) {
+        g.steamId = detected;
+        return true;
+      }
+      return false;
+    });
+
+    if (candidateGames.length === 0) {
+      return res.json({
+        success: true,
+        message: "Nenhum jogo com Steam AppID encontrado na biblioteca.",
+        total: 0,
+        synced: 0,
+      });
+    }
+
+    const steamId64 =
+      (process.env.STEAM_USER_ID || "").trim() || detectLocalSteamUser().steamId64;
+    let synced = 0;
+    const errors = [];
+
+    for (const g of candidateGames) {
+      try {
+        await syncGameAchievements(
+          g.id,
+          g.steamId,
+          steamKey,
+          steamId64,
+          g.resolvedExe || g.file
+        );
+        synced++;
+        await new Promise((r) => setTimeout(r, 250));
+      } catch (err) {
+        errors.push({ id: g.id, name: g.name, error: err.message });
+      }
+    }
+
+    res.json({
+      success: true,
+      total: candidateGames.length,
+      synced,
+      errors: errors.length > 0 ? errors : undefined,
+      message: `Sincronização concluída: ${synced} de ${candidateGames.length} jogos sincronizados.`,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
@@ -3376,6 +3745,81 @@ app.post("/system/power", systemActionLimiter, async (req, res) => {
   } catch (error) {
     console.error("Erro energia:", error);
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Wake-on-LAN (Disparo de Magic Packet UDP)
+app.post("/system/wake", systemActionLimiter, (req, res) => {
+  const dgram = require("dgram");
+  const targetMac = (req.body?.mac || process.env.TARGET_MAC || process.env.WOL_MAC || "").trim();
+
+  // Função para criar o Magic Packet de 102 bytes
+  function createMagicPacket(macAddress) {
+    const cleanMac = macAddress.replace(/[^0-9A-Fa-f]/g, "");
+    if (cleanMac.length !== 12) {
+      throw new Error("Endereço MAC inválido. Formato esperado: AA:BB:CC:DD:EE:FF");
+    }
+    const macBuffer = Buffer.from(cleanMac, "hex");
+    const magicPacket = Buffer.alloc(102);
+    // 6 bytes de 0xFF
+    magicPacket.fill(0xff, 0, 6);
+    // 16 repetições do MAC
+    for (let i = 0; i < 16; i++) {
+      macBuffer.copy(magicPacket, 6 + i * 6, 0, 6);
+    }
+    return magicPacket;
+  }
+
+  // Tenta resolver o MAC se não tiver sido especificado explicitamente
+  let macToSend = targetMac;
+  if (!macToSend) {
+    const nics = os.networkInterfaces();
+    for (const name of Object.keys(nics)) {
+      for (const net of nics[name]) {
+        if (!net.internal && net.mac && net.mac !== "00:00:00:00:00:00") {
+          macToSend = net.mac;
+          break;
+        }
+      }
+      if (macToSend) break;
+    }
+  }
+
+  if (!macToSend) {
+    return res.status(400).json({
+      success: false,
+      message: "Endereço MAC não configurado no .env (TARGET_MAC) nem informado na requisição.",
+    });
+  }
+
+  try {
+    const packet = createMagicPacket(macToSend);
+    const client = dgram.createSocket("udp4");
+
+    client.on("error", (err) => {
+      console.error("[Wake-on-LAN] Erro de socket:", err);
+      client.close();
+    });
+
+    client.bind(() => {
+      client.setBroadcast(true);
+      const broadcastIp = process.env.WOL_BROADCAST || "255.255.255.255";
+      client.send(packet, 0, packet.length, 9, broadcastIp, (err) => {
+        client.close();
+        if (err) {
+          console.error("[Wake-on-LAN] Falha ao enviar pacote:", err);
+          return res.status(500).json({ success: false, message: "Falha ao enviar Magic Packet." });
+        }
+        console.log(`[Wake-on-LAN] Magic Packet transmitido com sucesso para ${macToSend} via ${broadcastIp}:9`);
+        return res.json({
+          success: true,
+          message: `Magic Packet transmitido para ${macToSend}`,
+          mac: macToSend,
+        });
+      });
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
   }
 });
 

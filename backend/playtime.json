@@ -1,37 +1,37 @@
 {
   "version": "1.0",
-  "updatedAt": "2026-10-22T16:14:01.407Z",
+  "updatedAt": "2026-10-23T20:14:00.847Z",
   "summary": {
-    "couchTimeSeconds": 2821748,
-    "couchTimeFormatted": "783h 49m",
+    "couchTimeSeconds": 2841959,
+    "couchTimeFormatted": "789h 25m",
     "couchTimeOffsetSeconds": 0,
-    "gamesPlayTimeSeconds": 2821748,
-    "gamesPlayTimeFormatted": "783h 49m",
-    "sessionsTotalDurationSeconds": 1441971,
-    "sessionsTotalDurationFormatted": "400h 32m",
+    "gamesPlayTimeSeconds": 2841959,
+    "gamesPlayTimeFormatted": "789h 25m",
+    "sessionsTotalDurationSeconds": 1461789,
+    "sessionsTotalDurationFormatted": "406h 3m",
     "activeSessionSeconds": 0,
     "activeSessionFormatted": "0m",
-    "totalPlayCount": 764,
-    "totalSessionsRecorded": 721,
+    "totalPlayCount": 784,
+    "totalSessionsRecorded": 735,
     "totalGames": 49,
     "playedGamesCount": 35,
     "unplayedGamesCount": 14,
     "favoritesCount": 0,
-    "lastPlayedAt": "2026-10-22T15:56:36.406Z",
+    "lastPlayedAt": "2026-10-23T20:05:04.000Z",
     "lastPlayedGame": {
-      "id": 47,
-      "name": "God of War III Remastered",
-      "lastPlayed": "2026-10-22T15:56:36.406Z",
-      "playTimeSeconds": 2129,
-      "playTimeFormatted": "35m"
+      "id": 8,
+      "name": "Devil May Cry 5",
+      "lastPlayed": "2026-10-23T20:05:04.000Z",
+      "playTimeSeconds": 860340,
+      "playTimeFormatted": "238h 59m"
     },
     "mostPlayedGame": {
       "id": 8,
       "name": "Devil May Cry 5",
-      "playTimeSeconds": 860280,
-      "playTimeFormatted": "238h 58m",
-      "playCount": 4,
-      "lastPlayed": "2026-10-19T17:41:04.000Z"
+      "playTimeSeconds": 860340,
+      "playTimeFormatted": "238h 59m",
+      "playCount": 5,
+      "lastPlayed": "2026-10-23T20:05:04.000Z"
     }
   },
   "games": [
@@ -46,10 +46,10 @@
       "steamId": "601150",
       "cover": "devil-may-cry-5.jpg",
       "favorite": false,
-      "playTime": 860280,
-      "playTimeFormatted": "238h 58m",
-      "playCount": 4,
-      "lastPlayed": "2026-10-19T17:41:04.000Z"
+      "playTime": 860340,
+      "playTimeFormatted": "238h 59m",
+      "playCount": 5,
+      "lastPlayed": "2026-10-23T20:05:04.000Z"
     },
     {
       "id": 15,
@@ -62,10 +62,10 @@
       "steamId": null,
       "cover": "league-of-legends.jpg",
       "favorite": false,
-      "playTime": 784982,
-      "playTimeFormatted": "218h 3m",
-      "playCount": 475,
-      "lastPlayed": "2026-10-21T19:29:28.323Z"
+      "playTime": 793227,
+      "playTimeFormatted": "220h 20m",
+      "playCount": 480,
+      "lastPlayed": "2026-10-22T23:15:12.307Z"
     },
     {
       "id": 42,
@@ -78,10 +78,10 @@
       "steamId": "553850",
       "cover": "helldivers-2.jpg",
       "favorite": false,
-      "playTime": 276832,
-      "playTimeFormatted": "76h 53m",
-      "playCount": 3,
-      "lastPlayed": "2026-10-22T14:57:05.000Z"
+      "playTime": 276868,
+      "playTimeFormatted": "76h 54m",
+      "playCount": 5,
+      "lastPlayed": "2026-10-22T23:56:15.000Z"
     },
     {
       "id": 48,
@@ -110,10 +110,10 @@
       "steamId": null,
       "cover": "need-for-speed-heat.jpg",
       "favorite": false,
-      "playTime": 154140,
+      "playTime": 154164,
       "playTimeFormatted": "42h 49m",
-      "playCount": 17,
-      "lastPlayed": "2026-09-05T23:50:30.000Z"
+      "playCount": 18,
+      "lastPlayed": "2026-10-23T01:19:09.239Z"
     },
     {
       "id": 44,
@@ -126,10 +126,10 @@
       "steamId": "883710",
       "cover": "resident-evil-2-2019.jpg",
       "favorite": false,
-      "playTime": 123192,
-      "playTimeFormatted": "34h 13m",
-      "playCount": 23,
-      "lastPlayed": "2026-10-17T23:57:22.000Z"
+      "playTime": 123540,
+      "playTimeFormatted": "34h 19m",
+      "playCount": 24,
+      "lastPlayed": "2026-10-23T01:30:34.000Z"
     },
     {
       "id": 39,
@@ -158,10 +158,10 @@
       "steamId": null,
       "cover": "forza-horizon-6.jpg",
       "favorite": false,
-      "playTime": 46140,
-      "playTimeFormatted": "12h 49m",
-      "playCount": 20,
-      "lastPlayed": "2026-08-09T19:06:02.000Z"
+      "playTime": 46263,
+      "playTimeFormatted": "12h 51m",
+      "playCount": 21,
+      "lastPlayed": "2026-10-23T01:23:42.588Z"
     },
     {
       "id": 10,
@@ -308,6 +308,22 @@
       "lastPlayed": "2026-10-20T20:35:56.000Z"
     },
     {
+      "id": 41,
+      "name": "DRAGON BALL Sparking! ZERO",
+      "originalName": "DRAGON BALL Sparking! ZERO",
+      "customName": null,
+      "path": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\DRAGON BALL Sparking! ZERO.lnk",
+      "extension": ".lnk",
+      "resolvedExe": "SparkingZERO-Win64-Shipping.exe",
+      "steamId": null,
+      "cover": "dragon-ball-sparking-zero.jpg",
+      "favorite": false,
+      "playTime": 9239,
+      "playTimeFormatted": "2h 33m",
+      "playCount": 19,
+      "lastPlayed": "2026-10-23T14:30:11.386Z"
+    },
+    {
       "id": 4,
       "name": "MultiVersus",
       "originalName": "MultiVersus",
@@ -372,6 +388,38 @@
       "lastPlayed": "2026-06-21T21:23:11.000Z"
     },
     {
+      "id": 32,
+      "name": "Unverum",
+      "originalName": "Unverum",
+      "customName": null,
+      "path": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\Unverum.lnk",
+      "extension": ".lnk",
+      "resolvedExe": "Unverum.exe",
+      "steamId": null,
+      "cover": "unverum.jpg",
+      "favorite": false,
+      "playTime": 4927,
+      "playTimeFormatted": "1h 22m",
+      "playCount": 46,
+      "lastPlayed": "2026-10-23T14:30:51.220Z"
+    },
+    {
+      "id": 47,
+      "name": "God of War III Remastered",
+      "originalName": "God of War III Remastered",
+      "customName": null,
+      "path": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\God of War III Remastered.lnk",
+      "extension": ".lnk",
+      "resolvedExe": "God of War III.exe",
+      "steamId": null,
+      "cover": "god-of-war-iii-remastered.jpg",
+      "favorite": false,
+      "playTime": 4055,
+      "playTimeFormatted": "1h 7m",
+      "playCount": 14,
+      "lastPlayed": "2026-10-23T19:44:53.131Z"
+    },
+    {
       "id": 36,
       "name": "Marvel's Spider-Man 2",
       "originalName": "Marvel's Spider-Man 2",
@@ -388,22 +436,6 @@
       "lastPlayed": "2026-04-11T04:11:50.000Z"
     },
     {
-      "id": 41,
-      "name": "DRAGON BALL Sparking! ZERO",
-      "originalName": "DRAGON BALL Sparking! ZERO",
-      "customName": null,
-      "path": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\DRAGON BALL Sparking! ZERO.lnk",
-      "extension": ".lnk",
-      "resolvedExe": "SparkingZERO-Win64-Shipping.exe",
-      "steamId": null,
-      "cover": "dragon-ball-sparking-zero.jpg",
-      "favorite": false,
-      "playTime": 3578,
-      "playTimeFormatted": "59m",
-      "playCount": 16,
-      "lastPlayed": "2026-10-21T15:29:02.059Z"
-    },
-    {
       "id": 1,
       "name": "Brawlhalla",
       "originalName": "Brawlhalla",
@@ -418,22 +450,6 @@
       "playTimeFormatted": "45m",
       "playCount": 2,
       "lastPlayed": "2026-10-17T23:08:38.000Z"
-    },
-    {
-      "id": 47,
-      "name": "God of War III Remastered",
-      "originalName": "God of War III Remastered",
-      "customName": null,
-      "path": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\God of War III Remastered.lnk",
-      "extension": ".lnk",
-      "resolvedExe": "God of War III.exe",
-      "steamId": null,
-      "cover": "god-of-war-iii-remastered.jpg",
-      "favorite": false,
-      "playTime": 2129,
-      "playTimeFormatted": "35m",
-      "playCount": 10,
-      "lastPlayed": "2026-10-22T15:56:36.406Z"
     },
     {
       "id": 14,
@@ -482,22 +498,6 @@
       "playTimeFormatted": "22m",
       "playCount": 1,
       "lastPlayed": "2026-10-06T15:23:49.000Z"
-    },
-    {
-      "id": 32,
-      "name": "Unverum",
-      "originalName": "Unverum",
-      "customName": null,
-      "path": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\Unverum.lnk",
-      "extension": ".lnk",
-      "resolvedExe": "Unverum.exe",
-      "steamId": null,
-      "cover": "unverum.jpg",
-      "favorite": false,
-      "playTime": 1139,
-      "playTimeFormatted": "18m",
-      "playCount": 45,
-      "lastPlayed": "2026-10-19T20:12:47.656Z"
     },
     {
       "id": 28,
@@ -736,8 +736,8 @@
       "favorite": false,
       "playTime": 0,
       "playTimeFormatted": "0m",
-      "playCount": 0,
-      "lastPlayed": null
+      "playCount": 1,
+      "lastPlayed": "2026-10-22T16:29:31.066Z"
     },
     {
       "id": 43,
@@ -8751,6 +8751,160 @@
       "endedAt": "2026-10-22T15:56:36.406Z",
       "duration": 6,
       "durationFormatted": "6s"
+    },
+    {
+      "id": 722,
+      "gameId": 47,
+      "gameName": "God of War III Remastered",
+      "gameOriginalName": "God of War III Remastered",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\God of War III Remastered.lnk",
+      "startedAt": "2026-10-22T16:29:05.403Z",
+      "endedAt": "2026-10-22T16:29:17.008Z",
+      "duration": 11,
+      "durationFormatted": "11s"
+    },
+    {
+      "id": 723,
+      "gameId": 41,
+      "gameName": "DRAGON BALL Sparking! ZERO",
+      "gameOriginalName": "DRAGON BALL Sparking! ZERO",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\DRAGON BALL Sparking! ZERO.lnk",
+      "startedAt": "2026-10-22T20:38:48.407Z",
+      "endedAt": "2026-10-22T20:44:48.807Z",
+      "duration": 360,
+      "durationFormatted": "6m"
+    },
+    {
+      "id": 724,
+      "gameId": 15,
+      "gameName": "League of Legends",
+      "gameOriginalName": "League of Legends",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\League of Legends.lnk",
+      "startedAt": "2026-10-22T20:57:46.621Z",
+      "endedAt": "2026-10-22T23:15:12.307Z",
+      "duration": 8245,
+      "durationFormatted": "2h 17m"
+    },
+    {
+      "id": 725,
+      "gameId": 47,
+      "gameName": "God of War III Remastered",
+      "gameOriginalName": "God of War III Remastered",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\God of War III Remastered.lnk",
+      "startedAt": "2026-10-22T23:23:15.924Z",
+      "endedAt": "2026-10-22T23:54:58.280Z",
+      "duration": 1902,
+      "durationFormatted": "31m"
+    },
+    {
+      "id": 726,
+      "gameId": 42,
+      "gameName": "HELLDIVERS™ 2",
+      "gameOriginalName": "HELLDIVERS™ 2",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\HELLDIVERS™ 2.url",
+      "startedAt": "2026-10-22T23:55:15.245Z",
+      "endedAt": "2026-10-22T23:55:42.128Z",
+      "duration": 26,
+      "durationFormatted": "26s"
+    },
+    {
+      "id": 727,
+      "gameId": 42,
+      "gameName": "HELLDIVERS™ 2",
+      "gameOriginalName": "HELLDIVERS™ 2",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\HELLDIVERS™ 2.url",
+      "startedAt": "2026-10-22T23:55:45.487Z",
+      "endedAt": "2026-10-22T23:55:55.582Z",
+      "duration": 10,
+      "durationFormatted": "10s"
+    },
+    {
+      "id": 728,
+      "gameId": 41,
+      "gameName": "DRAGON BALL Sparking! ZERO",
+      "gameOriginalName": "DRAGON BALL Sparking! ZERO",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\DRAGON BALL Sparking! ZERO.lnk",
+      "startedAt": "2026-10-22T23:56:42.276Z",
+      "endedAt": "2026-10-23T01:18:14.645Z",
+      "duration": 4892,
+      "durationFormatted": "1h 21m"
+    },
+    {
+      "id": 729,
+      "gameId": 11,
+      "gameName": "Need for Speed Heat",
+      "gameOriginalName": "Need for Speed Heat",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\Need for Speed Heat.lnk",
+      "startedAt": "2026-10-23T01:18:45.052Z",
+      "endedAt": "2026-10-23T01:19:09.239Z",
+      "duration": 24,
+      "durationFormatted": "24s"
+    },
+    {
+      "id": 730,
+      "gameId": 18,
+      "gameName": "Forza Horizon 6",
+      "gameOriginalName": "Forza Horizon 6",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\Forza Horizon 6.lnk",
+      "startedAt": "2026-10-23T01:21:38.874Z",
+      "endedAt": "2026-10-23T01:23:42.588Z",
+      "duration": 123,
+      "durationFormatted": "2m"
+    },
+    {
+      "id": 731,
+      "gameId": 41,
+      "gameName": "DRAGON BALL Sparking! ZERO",
+      "gameOriginalName": "DRAGON BALL Sparking! ZERO",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\DRAGON BALL Sparking! ZERO.lnk",
+      "startedAt": "2026-10-23T14:23:22.312Z",
+      "endedAt": "2026-10-23T14:30:11.386Z",
+      "duration": 409,
+      "durationFormatted": "6m"
+    },
+    {
+      "id": 732,
+      "gameId": 32,
+      "gameName": "Unverum",
+      "gameOriginalName": "Unverum",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\Unverum.lnk",
+      "startedAt": "2026-10-23T13:27:42.679Z",
+      "endedAt": "2026-10-23T14:30:51.220Z",
+      "duration": 3788,
+      "durationFormatted": "1h 3m"
+    },
+    {
+      "id": 733,
+      "gameId": 47,
+      "gameName": "God of War III Remastered",
+      "gameOriginalName": "God of War III Remastered",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\God of War III Remastered.lnk",
+      "startedAt": "2026-10-23T19:44:19.789Z",
+      "endedAt": "2026-10-23T19:44:26.739Z",
+      "duration": 6,
+      "durationFormatted": "6s"
+    },
+    {
+      "id": 734,
+      "gameId": 47,
+      "gameName": "God of War III Remastered",
+      "gameOriginalName": "God of War III Remastered",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\God of War III Remastered.lnk",
+      "startedAt": "2026-10-23T19:44:45.209Z",
+      "endedAt": "2026-10-23T19:44:53.131Z",
+      "duration": 7,
+      "durationFormatted": "7s"
+    },
+    {
+      "id": 735,
+      "gameId": 8,
+      "gameName": "Devil May Cry 5",
+      "gameOriginalName": "Devil May Cry 5",
+      "gamePath": "C:\\Users\\igorc\\OneDrive\\Documentos\\Jogos\\Devil May Cry 5.url",
+      "startedAt": "2026-10-23T20:04:17.603Z",
+      "endedAt": "2026-10-23T20:04:33.021Z",
+      "duration": 15,
+      "durationFormatted": "15s"
     }
   ]
 }
