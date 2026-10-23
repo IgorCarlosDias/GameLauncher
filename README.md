@@ -4,7 +4,7 @@ Um launcher de jogos local e central de controle remoto desenvolvido para transf
 
 A ideia surgiu de uma necessidade real: com o PC conectado na TV da sala, trocar de jogo, ajustar o volume, alternar o áudio entre a TV e o headset ou digitar algo exigia levantar do sofá e usar mouse e teclado físicos.
 
-Com o **GameLauncher**, basta abrir o app (ou PWA) no celular para navegar pela sua biblioteca com capas automáticas, iniciar ou encerrar jogos e controlar todo o Windows remotamente.
+Com o **GameLauncher**, basta abrir o app (ou PWA) no celular para navegar pela sua biblioteca com capas automáticas, iniciar ou encerrar jogos, acompanhar conquistas e controlar todo o Windows remotamente.
 
 ---
 
@@ -14,31 +14,46 @@ Com o **GameLauncher**, basta abrir o app (ou PWA) no celular para navegar pela 
 - **Carregamento Paralelo & Persistência SQLite (`better-sqlite3`)**: Escaneamento recursivo rápido de pastas (`.exe`, `.lnk`, `.url`) com cache local persistente.
 - **⭐ Favoritos & "Continuar Jogando"**: Marque seus jogos preferidos e acesse rapidamente os últimos jogos abertos no topo da tela.
 - **⏱️ Rastreamento Automático de Tempo de Jogo**: Contabiliza automaticamente o tempo total jogado e a quantidade de sessões de cada título.
+- **🏆 Badges de Conquistas nos Cards (v1.3.0)**: Indicador visual com ícone de troféu (`🏆 X/Y`) exibido diretamente nos cartões e na visualização em lista, com destaque dourado para jogos platinados (100%).
 - **🖼️ Galeria Interativa SteamGridDB & Edição**: Busque e escolha entre dezenas de capas oficiais direto pelo celular, envie uma URL personalizada ou renomeie o título de exibição de qualquer jogo.
 - **🔍 Detecção Automática de Jogo em Execução**: Monitora em segundo plano se o processo do jogo continua aberto no PC e salva o tempo da sessão assim que você sai do jogo.
 - **🛑 Fechamento Inteligente (`Alt+F4` vs `Taskkill`)**: Opção de fechamento suave (`Alt+F4` para salvar progresso) ou encerramento imediato da árvore de processos (`Taskkill /F /T`).
-- **🔮 Notificações Esféricas Fluidas (v1.2.0)**: Animações visuais dinâmicas para quando um jogo é iniciado ou encerrado:
+- **🔮 Notificações Esféricas Fluidas**: Animações visuais dinâmicas para quando um jogo é iniciado ou encerrado:
   - Uma esfera luminosa 3D com brilho radial surge sobre a posição da capa e pulsa.
   - Uma onda de choque se expande da esfera revelando o cartão em cerca de 0.9s.
   - Revelação sequencial suave da capa, badges (`🚀 INICIADO` em violeta ou `🏁 ENCERRADO` em rosa/laranja), título e duração da sessão.
   - Ao fechar ou após o tempo limite, o cartão recolhe suavemente de volta para a esfera antes de sumir.
 
+### 🏆 Sistema Unificado de Conquistas (Steam & Jogos Locais) (v1.3.0)
+- **Conquistas da Steam Oficial**: Integração com a Steam Web API e cache local para sincronizar troféus, títulos, descrições e ícones bloqueados/desbloqueados em tempo real.
+- **Suporte Inovador a Jogos de PC Locais com Emuladores de Steam API**: Integração completa para jogos locais que utilizam emuladores como **Goldberg Emulator**, **CODEX**, **RUNE**, **Tenoke**, **EMPRESS**, **FLT**, entre outros:
+  - Varredura e decodificação automática de arquivos de progresso locais (`achievements.json`, `achievements.ini`, `stats.ini`).
+  - Suporte a múltiplos locais padrão de salvamento: `%PUBLIC%\Documents\Steam\<EMU>`, `%APPDATA%`, `%LOCALAPPDATA%` e diretório de instalação do jogo.
+- **Detecção Automática de AppID**: Identificação inteligente do Steam AppID vasculhando atalhos `.lnk` (resolução do executável de destino) e até 4 níveis de profundidade de diretórios em busca de `steam_appid.txt`, `steam_emu.ini`, `steam_api64.ini` e `steam_api.ini`.
+- **Modal Interativo de Conquistas**:
+  - Resumo de troféus desbloqueados / total, barra de progresso com porcentagem e selo identificador (`CONQUISTAS (JOGO LOCAL)` vs oficial).
+  - Exibição de ícones em alta resolução, nomes, descrições e data/hora exata do desbloqueio.
+  - Botão de sincronização sob demanda e suporte a vinculação manual de Steam AppID via modal de edição rápida.
+
 ### 🕹️ Controle Remoto do PC Integrado
 - **🖱️ Trackpad Virtual com Rastro Neon (60fps)**: Controle o cursor do mouse na TV deslizando o dedo no celular, com feedback visual de rastro luminoso em `<canvas>`, ondas de toque (ripple), clique esquerdo/direito, duplo clique e rolagem (scroll).
 - **⌨️ Teclado Remoto Completo**: Digite textos, senhas ou pesquisas pelo celular (com opção de **Digitar** sem Enter ou **Enviar ↵** com Enter), além de teclas dedicadas (`Backspace`, `Espaço`, `Tab`, `Enter`, `Esc`, `Alt+Tab`, `Win`, `Win+D` e setas direcionais).
 - **🔊 Controle de Volume & Saída de Áudio (CoreAudio / `IPolicyConfig`)**: Slider de volume em tempo real (`0–100%`), botão Mudo e seletor instantâneo de dispositivo de saída de áudio (alterne entre **TV HDMI** e **Headset/Caixas de Som** com 1 toque).
-- **📺 Alternância de Tela / Projeção (PC / TV) (v1.2.0)**: Alterne a exibição entre o monitor do PC e a TV da sala com um toque através do controle remoto.
+- **📺 Alternância de Tela / Projeção (PC / TV)**: Alterne a exibição entre o monitor do PC e a TV da sala com um toque através do controle remoto.
 - **🎵 Controles de Mídia**: Botões para `Play/Pause`, `Próxima Faixa` e `Faixa Anterior`.
 - **📊 Monitor de Desempenho em Tempo Real**: Barras de uso de **CPU (%)**, **RAM (GB)** e **Tempo Ativo (Uptime)** no topo do painel remoto.
 - **⚡ Gerenciamento de Energia**: Suspender o PC ou agendar Desligamento com timer de segurança de 30 segundos e botão de cancelamento.
-- **📱 Suporte PWA Completo & Vibração Tátil (v1.2.0)**: Ícones de alta resolução dedicados (192x192 e 512x512 maskable), registro automático de Service Worker para carregamento instantâneo e instalação como app nativo no smartphone.
+- **📱 Suporte PWA Completo & Vibração Tátil**: Ícones de alta resolução dedicados (192x192 e 512x512 maskable), registro automático de Service Worker para carregamento instantâneo e instalação como app nativo no smartphone.
 
-### 🔒 Segurança & Controle de Acesso (v1.1.0)
+### 🔒 Segurança & Painel de Configurações (v1.3.0)
 - **🛡️ Token de Autenticação (`API_TOKEN`)**: Todas as ações do sistema (abrir jogo, energia, mouse, teclado, configurações, sync) exigem token de autenticação protegido contra ataques de temporização (`crypto.timingSafeEqual`).
+- **⚙️ Painel Centralizado de Configurações**: Gerencie Steam Web API Key, SteamGridDB Key, credenciais do Supabase e API Token de segurança direto pela interface web no celular ou PC.
+- **👁️ Visualização Segura com Botão de Revelação**: Visualize e copie chaves e senhas com segurança através de alternância dinâmica entre modo mascarado e texto puro, sem expor dados involuntariamente na tela.
+- **📝 Persistência Automática em `.env`**: Atualização segura e imediata dos arquivos de ambiente do backend sem necessidade de edição manual de arquivos no servidor.
 - **🌐 CORS Restrito**: Aceita requisições exclusivamente da origem do Frontend (`http://SERVER_IP:8060`).
 - **🏡 Proteção de Sub-rede Local**: Backend e Frontend bloqueiam automaticamente conexões originadas fora da sua sub-rede privada (`192.168.0.0/24`, `10.0.0.0/8`, `172.16.0.0/12`).
 - **🧱 Regras Automatizadas no Firewall do Windows**: Scripts inclusos (`setup-firewall.bat` / `setup-firewall.ps1`) para liberar as portas `3060` e `8060` apenas para a rede local, sem expor portas para outras redes.
-- **☁️ Sincronização em Nuvem Segura (Supabase RLS)**: Suporte a backup em tempo real de tempos e sessões com autenticação direta (`to authenticated`). As chaves de API nunca são expostas em texto puro na interface (`••••••••XXXX`).
+- **☁️ Sincronização em Nuvem Segura (Supabase RLS)**: Suporte a backup em tempo real de tempos e sessões com autenticação direta (`to authenticated`).
 
 ---
 
@@ -53,10 +68,11 @@ React 19 + Vite Frontend (Porta 8060)
    │  (Filtro de Sub-rede Local 192.168.0.0/24)
    ▼
 Node.js + Express Backend (Porta 3060)
-   ├── SQLite (better-sqlite3) ──► Favoritos, Tempo de Jogo, Capas e Metadados
-   ├── SteamGridDB Service     ──► Busca e Download Automático de Capas
-   ├── Supabase Sync (RLS)     ──► Backup Contínuo e Sincronização em Nuvem
-   └── syscontrol.exe (C#/Win32) ─► CoreAudio, IPolicyConfig, SendInput (Mouse/Teclado)
+   ├── SQLite (better-sqlite3)    ──► Favoritos, Playtime, Capas, Conquistas e Metadados
+   ├── Steam Achievements Service ──► Steam Web API + Cache Local + Emuladores (Goldberg, CODEX, RUNE, Tenoke, EMPRESS, FLT)
+   ├── SteamGridDB Service        ──► Busca e Download Automático de Capas
+   ├── Supabase Sync (RLS)        ──► Backup Contínuo e Sincronização em Nuvem
+   └── syscontrol.exe (C#/Win32)  ──► CoreAudio, IPolicyConfig, SendInput (Mouse/Teclado)
 ```
 
 ---
@@ -73,6 +89,9 @@ Node.js + Express Backend (Porta 3060)
 ### Backend & Automação Nativa
 - **Node.js** + **Express 5**
 - **SQLite (`better-sqlite3`)** para banco de dados local zero-config
+- **Steam Web API & Motor de Emuladores de Jogos Locais**:
+  - Parsers especializados para `.ini` e `.json` de salvamentos de emuladores (Goldberg, CODEX, RUNE, Tenoke, EMPRESS, FLT)
+  - Inspeção de registro do Windows para identificação de usuário Steam ativo
 - **Supabase JS Client** com suporte a autenticação por usuário e RLS
 - **C# / Win32 Native Helper (`syscontrol.cs` / `syscontrol.exe`)**:
   - `IAudioEndpointVolume` & `IPolicyConfig` para controle de volume master e troca instantânea de saída de áudio no Windows
@@ -97,10 +116,11 @@ GameLauncher
 │
 ├── backend
 │   ├── server.js                # API Express, validações de segurança, scanner e rotas
-│   ├── database.js              # Camada de persistência SQLite (jogos, favoritos, playtime)
+│   ├── database.js              # Camada de persistência SQLite (jogos, favoritos, conquistas, playtime)
 │   ├── syscontrol.cs            # Código-fonte do controlador nativo Win32/CoreAudio em C#
 │   ├── syscontrol.exe           # Binário nativo compilado para controle rápido do Windows
 │   ├── services
+│   │   ├── steamAchievements.js # Integração Steam Web API, cache local e emuladores (Goldberg, CODEX, RUNE, etc.)
 │   │   ├── steamgriddb.js       # Integração com a API do SteamGridDB
 │   │   └── supabaseSync.js      # Sincronização em nuvem e login autenticado no Supabase
 │   ├── supabase_rls_authenticated.sql # Script SQL para aplicar RLS no Supabase
@@ -114,7 +134,15 @@ GameLauncher
     │   ├── pwa-192x192.png      # Ícone PWA alta resolução
     │   └── pwa-512x512.png      # Ícone PWA maskable
     ├── src
-    │   ├── App.jsx              # Interface principal, Trackpad Canvas, Notificações e Configurações
+    │   ├── components           # Componentes modulares
+    │   │   ├── AchievementsModal.jsx  # Modal detalhado de conquistas e progresso
+    │   │   ├── GameActionsSheet.jsx   # Menu de ações rápidas, capas, conquistas e edição de AppID
+    │   │   ├── GameCard.jsx           # Card com badge visual de conquistas e capa
+    │   │   ├── GameRow.jsx            # Linha da lista com indicador de troféus
+    │   │   └── ...
+    │   ├── pages
+    │   │   └── SettingsPage.jsx # Painel de configurações com revelação de credenciais
+    │   ├── App.jsx              # Interface principal, Trackpad Canvas, Notificações e Controle
     │   ├── main.jsx
     │   └── index.css            # Estilização completa e animações da notificação esférica
     ├── vite.config.js           # Configuração Vite com proteção de sub-rede local e strictPort
@@ -151,10 +179,14 @@ SERVER_IP=192.168.0.204
 PORT=3060
 FRONTEND_PORT=8060
 GAME_FOLDER=C:\Caminho\Dos\Seus\Jogos
-STEAMGRIDDB_KEY=sua_chave_api_do_steamgriddb
 API_TOKEN=gl_sec_seu_token_aqui
+STEAMGRIDDB_KEY=sua_chave_api_do_steamgriddb
 
-# Opcional: Sincronização em Nuvem (Supabase)
+# Conquistas Steam & Jogos Locais (Opcional)
+STEAM_API_KEY=sua_chave_api_da_steam
+STEAM_ID64=7656119... # Opcional: detectado automaticamente do Windows se omitido
+
+# Sincronização em Nuvem - Supabase (Opcional)
 SUPABASE_URL=https://xyz.supabase.co
 SUPABASE_KEY=sb_publishable_...
 SUPABASE_EMAIL=admin@gamelauncher.local
@@ -169,6 +201,10 @@ VITE_PORT=8060
 VITE_API_URL=http://192.168.0.204:3060
 VITE_API_TOKEN=gl_sec_seu_token_aqui
 ```
+
+> **💡 Dica sobre Conquistas**: 
+> - A `STEAM_API_KEY` pode ser gerada gratuitamente em [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey). Ela permite baixar automaticamente os nomes, descrições e ícones de alta resolução de todas as conquistas do jogo da Steam, mesmo para jogos locais com emuladores.
+> - Se o seu jogo local estiver com um emulador de Steam API (Goldberg, CODEX, RUNE, Tenoke, EMPRESS, FLT), o GameLauncher detectará o AppID automaticamente e lerá as conquistas salvas no seu computador. Você também pode associar manualmente o AppID clicando nos três pontinhos (`⋮`) do jogo -> **Editar Informações**.
 
 ### 3. Configurar Firewall do Windows (Recomendado)
 

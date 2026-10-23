@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "updatedAt": "2026-10-23T21:05:58.611Z",
+  "updatedAt": "2026-10-23T21:38:15.644Z",
   "summary": {
     "couchTimeSeconds": 2854139,
     "couchTimeFormatted": "792h 48m",
@@ -9,19 +9,19 @@
     "gamesPlayTimeFormatted": "792h 48m",
     "sessionsTotalDurationSeconds": 1461789,
     "sessionsTotalDurationFormatted": "406h 3m",
-    "activeSessionSeconds": 807,
-    "activeSessionFormatted": "13m",
-    "totalPlayCount": 788,
+    "activeSessionSeconds": 2744,
+    "activeSessionFormatted": "45m",
+    "totalPlayCount": 789,
     "totalSessionsRecorded": 735,
     "totalGames": 49,
     "playedGamesCount": 36,
     "unplayedGamesCount": 13,
     "favoritesCount": 0,
-    "lastPlayedAt": "2026-10-23T21:05:58.598Z",
+    "lastPlayedAt": "2026-10-23T21:38:15.628Z",
     "lastPlayedGame": {
       "id": 15,
       "name": "League of Legends",
-      "lastPlayed": "2026-10-23T21:05:58.598Z",
+      "lastPlayed": "2026-10-23T21:38:15.628Z",
       "playTimeSeconds": 793227,
       "playTimeFormatted": "220h 20m"
     },
@@ -64,8 +64,8 @@
       "favorite": false,
       "playTime": 793227,
       "playTimeFormatted": "220h 20m",
-      "playCount": 483,
-      "lastPlayed": "2026-10-23T21:05:58.598Z"
+      "playCount": 484,
+      "lastPlayed": "2026-10-23T21:38:15.628Z"
     },
     {
       "id": 42,
