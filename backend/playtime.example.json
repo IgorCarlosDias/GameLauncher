@@ -1,0 +1,29 @@
+{
+  "version": "1.0",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "summary": {
+    "couchTimeSeconds": 0,
+    "couchTimeFormatted": "0m",
+    "couchTimeOffsetSeconds": 0,
+    "gamesPlayTimeSeconds": 0,
+    "gamesPlayTimeFormatted": "0m",
+    "sessionsTotalDurationSeconds": 0,
+    "sessionsTotalDurationFormatted": "0m",
+    "activeSessionSeconds": 0,
+    "activeSessionFormatted": "0m",
+    "totalPlayCount": 0,
+    "totalSessionsRecorded": 0,
+    "totalGames": 0,
+    "playedGamesCount": 0,
+    "unplayedGamesCount": 0,
+    "favoritesCount": 0,
+    "totalAchievements": 0,
+    "unlockedAchievements": 0,
+    "lastPlayedAt": null,
+    "lastPlayedGame": null,
+    "mostPlayedGame": null
+  },
+  "games": [],
+  "sessions": [],
+  "achievements": []
+}

@@ -9,7 +9,8 @@ Write-Host "==========================================================" -Foregro
 Write-Host ""
 
 $taskName = "GameLauncherAutostart"
-$projectDir = "C:\Users\igorc\GameLauncher"
+$projectDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }
+if (-not $projectDir -or -not (Test-Path $projectDir)) { $projectDir = (Get-Location).Path }
 $vbsPath = Join-Path $projectDir "start-hidden.vbs"
 $currentUser = $env:USERNAME
 

@@ -7,6 +7,8 @@ backend/.env
 frontend/.env
 *.sqlite
 backend/database.sqlite
+backend/playtime.json
+playtime.json
 
 
 # =========================
