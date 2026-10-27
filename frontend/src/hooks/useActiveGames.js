@@ -2,8 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, gamesApi } from "../api";
 import { haptic } from "../lib/haptics";
 import { secondsSince } from "../lib/format";
-
-const POLL_MS = 6000;
+import { useWebSocket } from "./useWebSocket";
 
 function normalizeActive(res) {
   if (Array.isArray(res?.activeGames)) return res.activeGames;
@@ -11,65 +10,101 @@ function normalizeActive(res) {
 }
 
 function sameIds(a, b) {
-  return a.length === b.length && a.every((g, i) => g.id === b[i].id && g.startedAt === b[i].startedAt);
+  return (
+    a.length === b.length &&
+    a.every(
+      (g, i) =>
+        g.id === b[i].id &&
+        g.startedAt === b[i].startedAt &&
+        g.pid === b[i].pid
+    )
+  );
 }
 
 /**
- * Jogos em execução no PC: polling, iniciar, encerrar e dispensar.
- * Os callbacks `onStarted` / `onEnded` / `onChanged` são lidos por ref (identidade livre).
+ * Jogos em execução no PC: sincronização instantânea via WebSocket (ACTIVE_GAMES_UPDATE),
+ * iniciar, encerrar e dispensar.
  */
 export function useActiveGames({ enabled, toast, onStarted, onEnded, onChanged }) {
+  const { isConnected, sendMessage, subscribe } = useWebSocket();
+
   const [activeGames, setActiveGames] = useState([]);
   const [launchingId, setLaunchingId] = useState(null);
 
   const previousRef = useRef([]);
+  const initializedRef = useRef(false);
+  const manualLaunchIdsRef = useRef(new Set());
   const handlersRef = useRef({ onStarted, onEnded, onChanged });
 
   useEffect(() => {
     handlersRef.current = { onStarted, onEnded, onChanged };
   }, [onStarted, onEnded, onChanged]);
 
-  const poll = useCallback(async () => {
+  const fetchActiveOnce = useCallback(async () => {
     try {
       const list = normalizeActive(await gamesApi.getActive());
       setActiveGames((prev) => (sameIds(prev, list) ? prev : list));
+      initializedRef.current = true;
     } catch {
-      // Falha de polling é silenciosa; o status do PC já informa a conectividade.
+      // Silencioso: o status do PC informa a conectividade
     }
   }, []);
 
+  // Assina atualizações reativas em tempo real via WebSocket
+  useEffect(() => {
+    return subscribe("ACTIVE_GAMES_UPDATE", (payload) => {
+      const list = normalizeActive(payload);
+      setActiveGames((prev) => (sameIds(prev, list) ? prev : list));
+      initializedRef.current = true;
+    });
+  }, [subscribe]);
+
+  // Solicita sincronização ao habilitar ou reconectar
   useEffect(() => {
     if (!enabled) return undefined;
-    poll();
-    const id = setInterval(() => {
-      if (!document.hidden) poll();
-    }, POLL_MS);
-    const onVisible = () => !document.hidden && poll();
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [enabled, poll]);
+    if (isConnected) {
+      sendMessage({ action: "GET_STATE" });
+    } else {
+      fetchActiveOnce();
+    }
+    return undefined;
+  }, [enabled, isConnected, sendMessage, fetchActiveOnce]);
 
-  // Detecta jogos que saíram da lista (fechados pelo app, pelo PC ou dispensados).
+  // Detecta jogos iniciados externamente no PC ou encerrados (pelo app ou pelo PC)
   useEffect(() => {
     const previous = previousRef.current;
     previousRef.current = activeGames;
+
+    if (!initializedRef.current) return;
+
+    const added = activeGames.filter((g) => !previous.some((p) => p.id === g.id));
+    for (const started of added) {
+      if (manualLaunchIdsRef.current.has(started.id)) {
+        manualLaunchIdsRef.current.delete(started.id);
+      } else if (previous.length > 0 || started.source === "auto") {
+        handlersRef.current.onStarted?.(started);
+      }
+    }
+
     const removed = previous.filter((p) => !activeGames.some((g) => g.id === p.id));
-    if (!removed.length) return;
-    handlersRef.current.onEnded?.(removed[0], secondsSince(removed[0].startedAt));
-    handlersRef.current.onChanged?.();
+    if (removed.length > 0) {
+      handlersRef.current.onEnded?.(removed[0], secondsSince(removed[0].startedAt));
+      handlersRef.current.onChanged?.();
+    } else if (added.length > 0) {
+      handlersRef.current.onChanged?.();
+    }
   }, [activeGames]);
 
   const launch = useCallback(
     async (game) => {
       haptic(40);
       setLaunchingId(game.id);
+      manualLaunchIdsRef.current.add(game.id);
       toast.show(`Iniciando ${game.name}…`, "info");
       try {
         const res = await gamesApi.play(game.id);
         if (!res?.success) {
+          manualLaunchIdsRef.current.delete(game.id);
           toast.show(res?.message || "Não foi possível abrir o jogo", "error");
           return;
         }
@@ -82,14 +117,14 @@ export function useActiveGames({ enabled, toast, onStarted, onEnded, onChanged }
         setActiveGames((prev) => [entry, ...prev.filter((g) => g.id !== entry.id)]);
         toast.hide();
         handlersRef.current.onStarted?.(game);
-        poll();
       } catch (err) {
+        manualLaunchIdsRef.current.delete(game.id);
         toast.show(errorMessage(err, "Erro ao abrir jogo no computador"), "error");
       } finally {
         setLaunchingId(null);
       }
     },
-    [poll, toast]
+    [toast]
   );
 
   /** `force` = taskkill; `!force` = Alt+F4. `target` = { id, exeName } opcional. */
@@ -107,7 +142,6 @@ export function useActiveGames({ enabled, toast, onStarted, onEnded, onChanged }
         } else {
           setActiveGames([]);
         }
-        // Com jogo ativo, a notificação de "encerrado" substitui o toast.
         if (hadActive) toast.hide();
         else toast.show(res?.message || "Comando enviado", "success");
       } catch (err) {
@@ -123,10 +157,10 @@ export function useActiveGames({ enabled, toast, onStarted, onEnded, onChanged }
     try {
       await gamesApi.clearActive(gameId);
     } catch {
-      // Mesmo com falha de rede o aviso local é removido; o próximo poll reconcilia.
+      // Mesmo com falha de rede o aviso local é removido; o WebSocket reconcilia.
     }
     setActiveGames((prev) => (gameId ? prev.filter((g) => g.id !== gameId) : []));
   }, []);
 
-  return { activeGames, launchingId, launch, close, dismiss, refresh: poll };
+  return { activeGames, launchingId, launch, close, dismiss, refresh: fetchActiveOnce };
 }

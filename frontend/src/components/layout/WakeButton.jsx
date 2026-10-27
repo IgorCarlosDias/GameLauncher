@@ -29,7 +29,7 @@ export default function WakeButton({ online, wakeState, onWake }) {
       aria-label={online ? "PC online" : "Ligar PC com Wake-on-LAN"}
     >
       <span className="wake-btn__icon">
-        <Icon size={18} className={wakeState === "sending" ? "spin" : undefined} aria-hidden="true" />
+        <Icon size={15} className={wakeState === "sending" ? "spin" : undefined} aria-hidden="true" />
       </span>
       <span className="wake-btn__label">{label}</span>
     </button>

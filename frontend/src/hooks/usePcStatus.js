@@ -1,27 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage, systemApi } from "../api";
 import { haptic } from "../lib/haptics";
+import { useWebSocket, WS_STATE } from "./useWebSocket";
 
-const POLL_ONLINE_MS = 6000;
-const POLL_OFFLINE_MS = 4000;
-const POLL_WAKING_MS = 2500;
+const WAKE_RETRY_MS = 2500;
 const WAKE_TIMEOUT_MS = 90_000;
-const FAILURES_BEFORE_OFFLINE = 2;
 
 /**
- * Estado de conectividade do PC + Wake-on-LAN.
- * status:    "checking" | "online" | "offline"
- * wakeState: "idle" | "sending" | "waiting" | "success" | "error"
+ * Estado de conectividade do PC em tempo real via WebSocket + Wake-on-LAN.
+ * connectionState: "CONNECTED" | "CONNECTING" | "DISCONNECTED"
+ * status:          "checking"  | "online"     | "offline"
+ * wakeState:       "idle" | "sending" | "waiting" | "success" | "error"
  */
 export function usePcStatus({ toast, onOnline }) {
+  const { connectionState, subscribe, reconnect } = useWebSocket();
+
   const [status, setStatus] = useState("checking");
   const [info, setInfo] = useState(null);
   const [wakeState, setWakeState] = useState("idle");
 
   const statusRef = useRef("checking");
   const wakeStateRef = useRef("idle");
-  const failuresRef = useRef(0);
-  const timerRef = useRef(null);
   const onOnlineRef = useRef(onOnline);
 
   useEffect(() => {
@@ -37,72 +36,83 @@ export function usePcStatus({ toast, onOnline }) {
     if (prev === next) return;
     statusRef.current = next;
     setStatus(next);
-    if (next === "online") onOnlineRef.current?.({ recovered: prev === "offline" });
+    if (next === "online") {
+      onOnlineRef.current?.({ recovered: prev === "offline" });
+    }
   }, []);
 
-  const check = useCallback(async () => {
-    try {
-      const data = await systemApi.ping();
-      failuresRef.current = 0;
-      setInfo(data);
+  // Sincroniza o estado do PC instantaneamente a partir do canal WebSocket
+  useEffect(() => {
+    if (connectionState === WS_STATE.CONNECTED) {
       applyStatus("online");
-    } catch {
-      failuresRef.current += 1;
-      if (statusRef.current === "checking" || failuresRef.current >= FAILURES_BEFORE_OFFLINE) {
-        applyStatus("offline");
-      }
+    } else if (connectionState === WS_STATE.DISCONNECTED) {
+      applyStatus("offline");
+    } else if (statusRef.current === "checking") {
+      setStatus("checking");
     }
-  }, [applyStatus]);
+  }, [connectionState, applyStatus]);
 
-  // Polling adaptativo; pausa com a aba/PWA em segundo plano.
+  // Escuta metadados de host vindos dos eventos HOST_STATUS, HEARTBEAT e PONG
   useEffect(() => {
-    const nextDelay = () => {
-      if (wakeStateRef.current === "waiting") return POLL_WAKING_MS;
-      return statusRef.current === "online" ? POLL_ONLINE_MS : POLL_OFFLINE_MS;
+    const handleHostData = (payload) => {
+      if (!payload) return;
+      if (payload.serverIp || payload.games !== undefined) {
+        setInfo((prev) => ({
+          ...prev,
+          status: "online",
+          serverIp: payload.serverIp || prev?.serverIp,
+          port: payload.port || prev?.port,
+          frontendPort: payload.frontendPort || prev?.frontendPort,
+          games: payload.games ?? prev?.games,
+        }));
+      }
+      applyStatus("online");
     };
 
-    const tick = async () => {
-      if (!document.hidden) await check();
-      clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(tick, nextDelay());
-    };
+    const unsubHost = subscribe("HOST_STATUS", handleHostData);
+    const unsubHb = subscribe("HEARTBEAT", handleHostData);
+    const unsubPong = subscribe("PONG", handleHostData);
 
-    const onVisibility = () => {
-      if (document.hidden) return;
-      clearTimeout(timerRef.current);
-      tick();
-    };
-
-    tick();
-    document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      clearTimeout(timerRef.current);
-      document.removeEventListener("visibilitychange", onVisibility);
+      unsubHost();
+      unsubHb();
+      unsubPong();
     };
-  }, [check]);
+  }, [subscribe, applyStatus]);
 
-  // Resolve o fluxo de Wake-on-LAN: sucesso quando o PC responde, erro após o timeout.
+  // Durante aguardo de Wake-on-LAN, acelera tentativas de reconexão do WebSocket
   useEffect(() => {
-    if (wakeState === "waiting") {
-      if (status === "online") {
-        setWakeState("success");
-        haptic.success();
-        toast.show("PC ligado e pronto!", "success");
-        return undefined;
-      }
-      const timeout = setTimeout(() => {
-        setWakeState("error");
-        toast.show("O PC não respondeu. Verifique o WoL na BIOS e no Windows.", "warning");
-      }, WAKE_TIMEOUT_MS);
-      return () => clearTimeout(timeout);
+    if (wakeState !== "waiting") return undefined;
+
+    if (status === "online") {
+      setWakeState("success");
+      haptic.success();
+      toast.show("PC ligado e pronto!", "success");
+      return undefined;
     }
 
+    const retryInterval = setInterval(() => {
+      if (!document.hidden) reconnect();
+    }, WAKE_RETRY_MS);
+
+    const timeout = setTimeout(() => {
+      setWakeState("error");
+      toast.show("O PC não respondeu. Verifique o WoL na BIOS e no Windows.", "warning");
+    }, WAKE_TIMEOUT_MS);
+
+    return () => {
+      clearInterval(retryInterval);
+      clearTimeout(timeout);
+    };
+  }, [wakeState, status, reconnect, toast]);
+
+  useEffect(() => {
     if (wakeState === "success" || wakeState === "error") {
       const reset = setTimeout(() => setWakeState("idle"), 2600);
       return () => clearTimeout(reset);
     }
     return undefined;
-  }, [wakeState, status, toast]);
+  }, [wakeState]);
 
   const wake = useCallback(async () => {
     const current = wakeStateRef.current;
@@ -129,11 +139,12 @@ export function usePcStatus({ toast, onOnline }) {
 
   return {
     status,
+    connectionState,
     online: status === "online",
     offline: status === "offline",
     info,
     wakeState,
     wake,
-    recheck: check,
+    recheck: reconnect,
   };
 }

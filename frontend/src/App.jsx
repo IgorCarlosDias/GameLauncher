@@ -16,6 +16,7 @@ import BottomDock from "./components/layout/BottomDock";
 import PowerSheet from "./components/layout/PowerSheet";
 import ShutdownBanner from "./components/layout/ShutdownBanner";
 import SphericalNotification from "./components/notifications/SphericalNotification";
+import AuthModal from "./components/auth/AuthModal";
 
 import LibraryPage from "./pages/LibraryPage";
 import RemotePage from "./pages/RemotePage";
@@ -23,13 +24,25 @@ import StatsPage from "./pages/StatsPage";
 import SettingsPage from "./pages/SettingsPage";
 import AchievementsModal from "./components/AchievementsModal";
 
-import { API_BASE } from "./api";
+import { API_BASE, hasAuthToken, onUnauthorized } from "./api";
 import { formatPlayTimeDetailed } from "./lib/format";
 import { haptic } from "./lib/haptics";
 
 function GameLauncherApp() {
   const toast = useToast();
   const { page, settingsTab, navigate } = useRoute();
+
+  // 0. Autenticação Bearer Token (`gamelauncher_auth_token`)
+  const [authModal, setAuthModal] = useState(() => ({
+    open: !hasAuthToken(),
+    reason: !hasAuthToken() ? "missing_token" : "",
+  }));
+
+  useEffect(() => {
+    return onUnauthorized(({ reason }) => {
+      setAuthModal({ open: true, reason: reason || "http_401" });
+    });
+  }, []);
 
   // 1. Notificação Rica Esférica (v1.2.0)
   const [notification, setNotification] = useState(null);
@@ -139,14 +152,30 @@ function GameLauncherApp() {
     [activeGamesManager]
   );
 
-  // Carrega a biblioteca na montagem
+  // Carrega a biblioteca na montagem se já houver token autenticado
   useEffect(() => {
-    library.load();
+    if (hasAuthToken()) {
+      library.load();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handleAuthenticated = useCallback(() => {
+    setAuthModal({ open: false, reason: "" });
+    toast.show("Dispositivo autenticado com sucesso!", "success");
+    library.load();
+    pcStatus.recheck();
+  }, [library, pcStatus, toast]);
+
   return (
     <div className="app-layout">
+      {/* Modal de Autenticação por Bearer Token */}
+      <AuthModal
+        open={authModal.open}
+        reason={authModal.reason}
+        onAuthenticated={handleAuthenticated}
+      />
+
       {/* Notificação esférica de início/término de jogo */}
       <SphericalNotification
         notification={notification}

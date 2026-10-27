@@ -55,6 +55,13 @@ Com o **GameLauncher**, basta abrir o app (ou PWA) no celular para navegar pela 
 - **🧱 Regras Automatizadas no Firewall do Windows**: Scripts inclusos (`setup-firewall.bat` / `setup-firewall.ps1`) para liberar as portas `3060` e `8060` apenas para a rede local, sem expor portas para outras redes.
 - **☁️ Sincronização em Nuvem Segura (Supabase RLS)**: Suporte a backup em tempo real de tempos e sessões com autenticação direta (`to authenticated`).
 
+### ⚡ Tempo Real, Autenticação & Cache Offline (v1.4.0)
+- **⚡ WebSockets Bidirecionais (`/ws`)**: Comunicação em tempo real substituindo polling HTTP para status de host (Online/Offline com Heartbeat de 5s), status de jogos em execução e sincronização instantânea de volume do sistema operacional.
+- **🎧 Monitor de Volume de Hardware (CoreAudio Daemon)**: Processo daemon em C# (`syscontrol.exe watchvol`) com listener de callbacks do Windows (`IAudioEndpointVolumeCallback`). Qualquer alteração física (teclado, mixer) reflete no celular imediatamente, com supressão de eco durante o arrasto do slider.
+- **🛡️ Autenticação Leve Bearer & Modal de Pareamento**: Proteção de rotas REST e handshake WebSocket via `Authorization: Bearer <TOKEN>` ou query param com modal de primeiro acesso no celular ("Lembrar neste aparelho" via `localStorage`).
+- **🖼️ Cache Local de Capas & Pré-Carregamento em Background**: Armazenamento offline de posters via Cache Storage API (`gamelauncher-covers-v1`) com fallback transparente para IndexedDB, carregamento a 0ms e pré-carregamento não bloqueante (`requestIdleCallback`).
+- **📱 Header Mobile Compacto**: Dimensões otimizadas e espaçamento reduzido para telas menores de smartphones, mantendo layout estendido em desktops via media queries.
+
 ---
 
 ## 🖥️ Arquitetura
@@ -62,17 +69,18 @@ Com o **GameLauncher**, basta abrir o app (ou PWA) no celular para navegar pela 
 ```
 Celular (PWA / Navegador na Rede Local)
    │
-   │  HTTP REST API (Headers: x-api-token | CORS Restrito)
+   │  WebSocket Bidirecional (/ws) + HTTP REST (Bearer Auth / CORS Restrito)
    ▼
 React 19 + Vite Frontend (Porta 8060)
-   │  (Filtro de Sub-rede Local 192.168.0.0/24)
+   │  (Filtro de Sub-rede Local 192.168.0.0/24 + Cache de Capas CacheStorage/IDB)
    ▼
 Node.js + Express Backend (Porta 3060)
+   ├── WebSocket Server (/ws)     ──► Heartbeats, Push de Volume & Jogos Ativos
    ├── SQLite (better-sqlite3)    ──► Favoritos, Playtime, Capas, Conquistas e Metadados
    ├── Steam Achievements Service ──► Steam Web API + Cache Local + Emuladores (Goldberg, CODEX, RUNE, Tenoke, EMPRESS, FLT)
    ├── SteamGridDB Service        ──► Busca e Download Automático de Capas
    ├── Supabase Sync (RLS)        ──► Backup Contínuo e Sincronização em Nuvem
-   └── syscontrol.exe (C#/Win32)  ──► CoreAudio, IPolicyConfig, SendInput (Mouse/Teclado)
+   └── syscontrol.exe (C#/Win32)  ──► CoreAudio Daemon (watchvol), IPolicyConfig, SendInput (Mouse/Teclado)
 ```
 
 ---

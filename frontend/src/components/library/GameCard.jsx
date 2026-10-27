@@ -1,9 +1,9 @@
 import { memo } from "react";
 import { Clock, Gamepad2, Loader2, MoreHorizontal, Star, Trophy } from "lucide-react";
 import PlatformBadge from "../ui/PlatformBadge";
-import { coverUrl } from "../../api";
 import { getGameGenre, getPlatform } from "../../lib/games";
 import { formatPlayTime } from "../../lib/format";
+import { useImageCache } from "../../hooks/useImageCache";
 import { useLongPress } from "../../hooks/useLongPress";
 import { vibrate } from "../../lib/haptics";
 
@@ -27,7 +27,7 @@ function GameCard({ game, running, launching, variant = "grid", onLaunch, onOpen
   const platform = getPlatform(game);
   const genre = getGameGenre(game);
   const playTime = formatPlayTime(game.playTime);
-  const cover = coverUrl(game.cover);
+  const { src: cover, isCachedBlob, onError: handleCoverError } = useImageCache(game.cover);
 
   const classes = [
     "game-card",
@@ -52,17 +52,21 @@ function GameCard({ game, running, launching, variant = "grid", onLaunch, onOpen
           {cover ? (
             <img
               ref={markLoaded}
-              className="game-card__img"
+              className={`game-card__img${isCachedBlob ? " is-loaded" : ""}`}
               src={cover}
               alt=""
               loading="lazy"
               decoding="async"
               draggable={false}
               onLoad={(e) => e.currentTarget.classList.add("is-loaded")}
+              onError={handleCoverError}
             />
           ) : (
-            <span className="game-card__placeholder">
-              <Gamepad2 size={34} aria-hidden="true" />
+            <span className="game-card__placeholder" aria-hidden="true">
+              <Gamepad2 size={34} />
+              <span className="game-card__placeholder-initials">
+                {(game.name || "GL").slice(0, 2).toUpperCase()}
+              </span>
             </span>
           )}
         </span>

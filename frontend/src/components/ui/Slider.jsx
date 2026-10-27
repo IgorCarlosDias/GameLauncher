@@ -10,6 +10,7 @@ const THUMB = 26;
 export default function Slider({
   value,
   onChange,
+  onDragStart,
   onCommit,
   min = 0,
   max = 100,
@@ -49,11 +50,12 @@ export default function Slider({
     rootRef.current.setPointerCapture(e.pointerId);
     rootRef.current.dataset.dragging = "true";
     haptic.tick();
-    onChange(valueFromPointer(e));
+    onDragStart?.();
+    onChange(valueFromPointer(e), { dragging: true });
   };
 
   const onPointerMove = (e) => {
-    if (draggingRef.current) onChange(valueFromPointer(e));
+    if (draggingRef.current) onChange(valueFromPointer(e), { dragging: true });
   };
 
   const endDrag = () => {
@@ -76,7 +78,7 @@ export default function Slider({
     };
     if (!(e.key in keys)) return;
     e.preventDefault();
-    onChange(Math.min(max, Math.max(min, keys[e.key])));
+    onChange(Math.min(max, Math.max(min, keys[e.key])), { dragging: false });
     onCommit?.();
   };
 
@@ -95,6 +97,7 @@ export default function Slider({
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
+      onLostPointerCapture={endDrag}
       onKeyDown={onKeyDown}
     >
       <div ref={trackRef} className="slider__track">

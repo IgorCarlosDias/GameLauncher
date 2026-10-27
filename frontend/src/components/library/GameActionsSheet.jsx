@@ -1,9 +1,9 @@
-import { Pencil, Play, Power, Square, Star, Trophy, XSquare } from "lucide-react";
+import { Gamepad2, Pencil, Play, Power, Square, Star, Trophy, XSquare } from "lucide-react";
 import Sheet from "../ui/Sheet";
 import PlatformBadge from "../ui/PlatformBadge";
-import { coverUrl } from "../../api";
 import { getGameGenre, getPlatform } from "../../lib/games";
 import { formatPlayTime } from "../../lib/format";
+import { useImageCache } from "../../hooks/useImageCache";
 import { vibrate } from "../../lib/haptics";
 
 function Action({ icon: Icon, label, hint, tone, onClick, disabled }) {
@@ -36,7 +36,7 @@ export default function GameActionsSheet({
   const open = Boolean(game);
   // Mantém os dados durante a animação de saída.
   const current = game || {};
-  const cover = coverUrl(current.cover);
+  const { src: cover, onError: handleCoverError } = useImageCache(current.cover);
   const genre = getGameGenre(current);
 
   const act = (fn, pattern = 15) => () => {
@@ -55,7 +55,13 @@ export default function GameActionsSheet({
       {open && (
         <>
           <div className="actions-hero">
-            <div className="actions-hero__cover">{cover && <img src={cover} alt="" decoding="async" />}</div>
+            <div className="actions-hero__cover">
+              {cover ? (
+                <img src={cover} alt="" decoding="async" onError={handleCoverError} />
+              ) : (
+                <Gamepad2 size={24} aria-hidden="true" />
+              )}
+            </div>
             <div className="actions-hero__badges">
               <PlatformBadge platform={getPlatform(current)} />
               {genre && <span className="genre-badge">{genre}</span>}

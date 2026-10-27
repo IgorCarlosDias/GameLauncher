@@ -77,10 +77,16 @@ namespace SysControl {
         int GetValue(ref PROPERTYKEY key, out PROPVARIANT pv);
     }
 
+    [Guid("657804FA-D6AD-4496-8A60-352752AF4F89"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IAudioEndpointVolumeCallback {
+        [PreserveSig]
+        int OnNotify(IntPtr pNotifyData);
+    }
+
     [Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     internal interface IAudioEndpointVolume {
-        int RegisterControlChangeNotify(IntPtr pNotify);
-        int UnregisterControlChangeNotify(IntPtr pNotify);
+        int RegisterControlChangeNotify([MarshalAs(UnmanagedType.Interface)] IAudioEndpointVolumeCallback pNotify);
+        int UnregisterControlChangeNotify([MarshalAs(UnmanagedType.Interface)] IAudioEndpointVolumeCallback pNotify);
         int GetChannelCount(out uint pnChannelCount);
         int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
         int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
@@ -92,6 +98,45 @@ namespace SysControl {
         int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
         int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
         int GetMute([MarshalAs(UnmanagedType.Bool)] out bool pbMute);
+    }
+
+    internal class VolumeNotifyHandler : IAudioEndpointVolumeCallback {
+        private readonly AutoResetEvent _signal;
+        private readonly Guid _selfContext;
+        public volatile int LastVolume = -1;
+        public volatile bool LastMuted = false;
+        public volatile bool LastIsExternal = true;
+        public volatile bool HasNotification = false;
+
+        public VolumeNotifyHandler(AutoResetEvent signal, Guid selfContext) {
+            _signal = signal;
+            _selfContext = selfContext;
+        }
+
+        public int OnNotify(IntPtr pNotifyData) {
+            try {
+                if (pNotifyData != IntPtr.Zero) {
+                    byte[] guidBytes = new byte[16];
+                    Marshal.Copy(pNotifyData, guidBytes, 0, 16);
+                    Guid ctx = new Guid(guidBytes);
+
+                    bool muted = Marshal.ReadInt32(pNotifyData, 16) != 0;
+                    byte[] floatBytes = new byte[4];
+                    Marshal.Copy(new IntPtr(pNotifyData.ToInt64() + 20), floatBytes, 0, 4);
+                    float level = BitConverter.ToSingle(floatBytes, 0);
+                    int pct = (int)Math.Round(level * 100.0f);
+                    if (pct < 0) pct = 0;
+                    if (pct > 100) pct = 100;
+
+                    LastVolume = pct;
+                    LastMuted = muted;
+                    LastIsExternal = (ctx != _selfContext);
+                    HasNotification = true;
+                    _signal.Set();
+                }
+            } catch { }
+            return 0;
+        }
     }
 
     [ComImport, Guid("870AF99C-171D-4F9E-AF0D-E63DF40C2BC9")]
@@ -523,6 +568,8 @@ namespace SysControl {
             }
         }
 
+        private static readonly Guid SelfEventContext = new Guid("7A91C3E2-4B5D-4F8E-9A1C-2D3E4F5A6B7C");
+
         static IAudioEndpointVolume GetAudioEndpointVolume() {
             IMMDeviceEnumerator enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
             IMMDevice dev;
@@ -557,7 +604,7 @@ namespace SysControl {
                 if (nextPct < 0) nextPct = 0;
                 if (nextPct > 100) nextPct = 100;
 
-                Guid ctx = Guid.Empty;
+                Guid ctx = SelfEventContext;
                 vol.SetMasterVolumeLevelScalar(nextPct / 100.0f, ref ctx);
                 if (deltaPct > 0) {
                     vol.SetMute(false, ref ctx);
@@ -573,7 +620,7 @@ namespace SysControl {
                 IAudioEndpointVolume vol = GetAudioEndpointVolume();
                 bool muted = false;
                 vol.GetMute(out muted);
-                Guid ctx = Guid.Empty;
+                Guid ctx = SelfEventContext;
                 vol.SetMute(!muted, ref ctx);
                 PrintVolumeJson();
             } catch (Exception ex) {
@@ -586,7 +633,7 @@ namespace SysControl {
                 if (pct < 0) pct = 0;
                 if (pct > 100) pct = 100;
                 IAudioEndpointVolume vol = GetAudioEndpointVolume();
-                Guid ctx = Guid.Empty;
+                Guid ctx = SelfEventContext;
                 vol.SetMasterVolumeLevelScalar(pct / 100.0f, ref ctx);
                 if (pct > 0) {
                     vol.SetMute(false, ref ctx);
@@ -594,6 +641,158 @@ namespace SysControl {
                 PrintVolumeJson();
             } catch (Exception ex) {
                 Console.WriteLine("{\"error\":\"" + EscapeJson(ex.Message) + "\"}");
+            }
+        }
+
+        static void WatchVolumeDaemon() {
+            AutoResetEvent signal = new AutoResetEvent(false);
+            VolumeNotifyHandler handler = new VolumeNotifyHandler(signal, SelfEventContext);
+            Queue<string> pendingCommands = new Queue<string>();
+            object cmdLock = new object();
+
+            IMMDeviceEnumerator enumerator = null;
+            IAudioEndpointVolume currentVol = null;
+            string currentDeviceId = "";
+            int lastEmittedVol = -1;
+            bool lastEmittedMuted = false;
+
+            // Thread assíncrona para receber comandos rápidos via stdin e acordar o loop principal imediatamente
+            Thread stdinThread = new Thread(() => {
+                try {
+                    string line;
+                    while ((line = Console.ReadLine()) != null) {
+                        string trimmed = line.Trim();
+                        if (string.IsNullOrEmpty(trimmed)) continue;
+                        lock (cmdLock) {
+                            pendingCommands.Enqueue(trimmed);
+                        }
+                        signal.Set();
+                    }
+                } catch { }
+            });
+            stdinThread.IsBackground = true;
+            stdinThread.Start();
+
+            while (true) {
+                try {
+                    if (enumerator == null) {
+                        enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+                    }
+
+                    IMMDevice defaultDev = null;
+                    string devId = "";
+                    try {
+                        enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out defaultDev);
+                        if (defaultDev != null) defaultDev.GetId(out devId);
+                    } catch { }
+
+                    bool deviceChanged = false;
+                    if (!string.IsNullOrEmpty(devId) && devId != currentDeviceId) {
+                        if (currentVol != null) {
+                            try { currentVol.UnregisterControlChangeNotify(handler); } catch { }
+                        }
+                        Guid iid = typeof(IAudioEndpointVolume).GUID;
+                        object o;
+                        defaultDev.Activate(ref iid, 23, IntPtr.Zero, out o);
+                        currentVol = (IAudioEndpointVolume)o;
+                        currentVol.RegisterControlChangeNotify(handler);
+                        currentDeviceId = devId;
+                        deviceChanged = true;
+                    }
+
+                    bool hadInternalCommand = false;
+                    if (currentVol != null) {
+                        while (true) {
+                            string cmdLine = null;
+                            lock (cmdLock) {
+                                if (pendingCommands.Count > 0) {
+                                    cmdLine = pendingCommands.Dequeue();
+                                }
+                            }
+                            if (cmdLine == null) break;
+
+                            string[] parts = cmdLine.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                            if (parts.Length == 0) continue;
+                            string cmd = parts[0].ToLowerInvariant();
+                            try {
+                                if (cmd == "setvol" && parts.Length > 1) {
+                                    int pct;
+                                    if (int.TryParse(parts[1], out pct)) {
+                                        if (pct < 0) pct = 0;
+                                        if (pct > 100) pct = 100;
+                                        Guid ctx = SelfEventContext;
+                                        currentVol.SetMasterVolumeLevelScalar(pct / 100.0f, ref ctx);
+                                        if (pct > 0) currentVol.SetMute(false, ref ctx);
+                                        hadInternalCommand = true;
+                                    }
+                                } else if (cmd == "volup") {
+                                    int step = 2;
+                                    if (parts.Length > 1) int.TryParse(parts[1], out step);
+                                    float lvl = 0;
+                                    currentVol.GetMasterVolumeLevelScalar(out lvl);
+                                    int next = Math.Min(100, Math.Max(0, (int)Math.Round(lvl * 100) + step));
+                                    Guid ctx = SelfEventContext;
+                                    currentVol.SetMasterVolumeLevelScalar(next / 100.0f, ref ctx);
+                                    currentVol.SetMute(false, ref ctx);
+                                    hadInternalCommand = true;
+                                } else if (cmd == "voldown") {
+                                    int step = 2;
+                                    if (parts.Length > 1) int.TryParse(parts[1], out step);
+                                    float lvl = 0;
+                                    currentVol.GetMasterVolumeLevelScalar(out lvl);
+                                    int next = Math.Min(100, Math.Max(0, (int)Math.Round(lvl * 100) - step));
+                                    Guid ctx = SelfEventContext;
+                                    currentVol.SetMasterVolumeLevelScalar(next / 100.0f, ref ctx);
+                                    hadInternalCommand = true;
+                                } else if (cmd == "volmute") {
+                                    bool m = false;
+                                    currentVol.GetMute(out m);
+                                    Guid ctx = SelfEventContext;
+                                    currentVol.SetMute(!m, ref ctx);
+                                    hadInternalCommand = true;
+                                }
+                            } catch { }
+                        }
+
+                        int pctNow;
+                        bool mutedNow;
+                        bool isExternal = !hadInternalCommand;
+
+                        if (handler.HasNotification && !hadInternalCommand) {
+                            handler.HasNotification = false;
+                            pctNow = handler.LastVolume;
+                            mutedNow = handler.LastMuted;
+                            isExternal = handler.LastIsExternal;
+                        } else {
+                            handler.HasNotification = false;
+                            float level = 0;
+                            currentVol.GetMasterVolumeLevelScalar(out level);
+                            currentVol.GetMute(out mutedNow);
+                            pctNow = (int)Math.Round(level * 100.0f);
+                            if (pctNow < 0) pctNow = 0;
+                            if (pctNow > 100) pctNow = 100;
+                        }
+
+                        if (deviceChanged || pctNow != lastEmittedVol || mutedNow != lastEmittedMuted) {
+                            lastEmittedVol = pctNow;
+                            lastEmittedMuted = mutedNow;
+                            string src = isExternal ? "external" : "internal";
+                            Console.WriteLine(
+                                "{\"type\":\"VOLUME_UPDATE\",\"value\":" + pctNow +
+                                ",\"is_muted\":" + (mutedNow ? "true" : "false") +
+                                ",\"volume\":" + pctNow +
+                                ",\"muted\":" + (mutedNow ? "true" : "false") +
+                                ",\"source\":\"" + src + "\"" +
+                                ",\"deviceChanged\":" + (deviceChanged ? "true" : "false") + "}"
+                            );
+                            Console.Out.Flush();
+                        }
+                    }
+                } catch {
+                    Thread.Sleep(500);
+                }
+
+                signal.WaitOne(250);
             }
         }
 
@@ -770,6 +969,9 @@ namespace SysControl {
                     break;
                 case "getvol":
                     PrintVolumeJson();
+                    break;
+                case "watchvol":
+                    WatchVolumeDaemon();
                     break;
                 case "setvol":
                     if (args.Length > 1) {

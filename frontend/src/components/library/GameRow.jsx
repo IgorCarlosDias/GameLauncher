@@ -1,9 +1,9 @@
 import { memo } from "react";
 import { Clock, Gamepad2, Loader2, MoreHorizontal, Play, Star, Trophy } from "lucide-react";
 import PlatformBadge from "../ui/PlatformBadge";
-import { coverUrl } from "../../api";
 import { getGameGenre, getPlatform } from "../../lib/games";
 import { formatPlayTime } from "../../lib/format";
+import { useImageCache } from "../../hooks/useImageCache";
 import { useLongPress } from "../../hooks/useLongPress";
 import { vibrate } from "../../lib/haptics";
 
@@ -16,7 +16,7 @@ function GameRow({ game, running, launching, onLaunch, onOpenActions }) {
     },
     onLongPress: () => onOpenActions(game),
   });
-  const cover = coverUrl(game.cover);
+  const { src: cover, onError: handleCoverError } = useImageCache(game.cover);
   const playTime = formatPlayTime(game.playTime);
   const genre = getGameGenre(game);
 
@@ -25,7 +25,14 @@ function GameRow({ game, running, launching, onLaunch, onOpenActions }) {
       <button type="button" className="game-row__main" disabled={launching} {...handlers}>
         <span className="game-row__thumb">
           {cover ? (
-            <img src={cover} alt="" loading="lazy" decoding="async" draggable={false} />
+            <img
+              src={cover}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              draggable={false}
+              onError={handleCoverError}
+            />
           ) : (
             <Gamepad2 size={20} aria-hidden="true" />
           )}

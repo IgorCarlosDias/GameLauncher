@@ -3,6 +3,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 require("dotenv").config();
 
 const express = require("express");
+const http = require("http");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const fs = require("fs");
@@ -14,6 +15,7 @@ const axios = require("axios");
 const { getGameCover, searchGameCovers, testSteamGridDbKey } = require("./services/steamgriddb");
 const { detectGameGenre, detectGenreFromLocalRules } = require("./services/genreDetector");
 const supabaseSync = require("./services/supabaseSync");
+const { wsManager } = require("./services/wsManager");
 const { dbRun, dbGet, dbAll, initDatabase } = require("./database");
 // Helper para carregar serviço de conquistas com resolução dinâmica sem travar em cache antigo
 const getSteamAchievementsService = () => {
@@ -60,17 +62,23 @@ let PORT = process.env.PORT || "3060";
 let FRONTEND_PORT = process.env.FRONTEND_PORT || "8060";
 let GAME_FOLDER = process.env.GAME_FOLDER || "";
 let SERVER_IP = process.env.SERVER_IP || "127.0.0.1";
-let API_TOKEN = (process.env.API_TOKEN || process.env.VITE_API_TOKEN || "").trim();
+let API_TOKEN = (
+  process.env.AUTH_TOKEN ||
+  process.env.API_TOKEN ||
+  process.env.VITE_API_TOKEN ||
+  ""
+).trim();
 
 const ROOT_ENV_PATH = path.resolve(__dirname, "../.env");
 const BACKEND_ENV_PATH = path.join(__dirname, ".env");
 const FRONTEND_ENV_PATH = path.resolve(__dirname, "../frontend/.env");
 
-// Se não houver API_TOKEN configurado, gera um token seguro automaticamente
+// Se não houver AUTH_TOKEN / API_TOKEN configurado, gera um token seguro automaticamente
 if (!API_TOKEN) {
   API_TOKEN = "gl_sec_" + crypto.randomBytes(16).toString("hex");
-  process.env.API_TOKEN = API_TOKEN;
 }
+process.env.AUTH_TOKEN = API_TOKEN;
+process.env.API_TOKEN = API_TOKEN;
 
 function getAllowedSubnetPrefix() {
   const ip = (SERVER_IP || "192.168.0.204").trim();
@@ -182,7 +190,7 @@ const systemActionLimiter = rateLimit({
 
 app.use(apiLimiter);
 
-// 3. Autenticação por Token (API_TOKEN) para todas as rotas de ação e rotas sensíveis
+// 3. Autenticação por Bearer Token (AUTH_TOKEN / API_TOKEN) para todos os endpoints REST
 function verifyTokenTimingSafe(provided, expected) {
   if (!expected) return true;
   if (!provided || typeof provided !== "string") return false;
@@ -192,39 +200,48 @@ function verifyTokenTimingSafe(provided, expected) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-const PROTECTED_GET_PATHS = new Set([
-  "/settings",
-  "/supabase/status",
-  "/times/export",
-]);
+function extractRequestToken(req) {
+  const authHeader = String(req.headers.authorization || "");
+  if (/^Bearer\s+/i.test(authHeader)) {
+    return authHeader.replace(/^Bearer\s+/i, "").trim();
+  }
+  if (typeof req.headers["x-api-token"] === "string") {
+    return req.headers["x-api-token"].trim();
+  }
+  if (typeof req.query?.token === "string") {
+    return req.query.token.trim();
+  }
+  return "";
+}
 
 app.use((req, res, next) => {
   if (req.method === "OPTIONS") return next();
 
-  const isMutating = req.method !== "GET" && req.method !== "HEAD";
-  const isProtectedGet =
-    PROTECTED_GET_PATHS.has(req.path) || /^\/games\/[^/]+\/covers$/.test(req.path);
-
-  if (!isMutating && !isProtectedGet) {
+  // Permite ping básico de disponibilidade (GET /) e arquivos estáticos de capa (/covers/*)
+  if ((req.method === "GET" || req.method === "HEAD") && (req.path === "/" || req.path.startsWith("/covers/"))) {
     return next();
   }
 
-  const headerToken =
-    req.headers["x-api-token"] ||
-    (req.headers.authorization?.startsWith("Bearer ")
-      ? req.headers.authorization.slice(7)
-      : "");
+  const candidateToken = extractRequestToken(req);
 
-  if (!verifyTokenTimingSafe(headerToken, API_TOKEN)) {
-    console.warn(`[Segurança] Tentativa não autorizada em ${req.method} ${req.path} (IP: ${req.socket?.remoteAddress})`);
+  if (!verifyTokenTimingSafe(candidateToken, API_TOKEN)) {
+    console.warn(`[Segurança] 401 Unauthorized em ${req.method} ${req.path} (IP: ${req.socket?.remoteAddress})`);
+    res.setHeader("WWW-Authenticate", 'Bearer realm="GameLauncher"');
     return res.status(401).json({
       success: false,
       code: "INVALID_API_TOKEN",
-      message: "Não autorizado: Token/PIN de segurança inválido ou ausente.",
+      message: "Não autorizado: Token Bearer de segurança inválido ou ausente.",
     });
   }
 
   next();
+});
+
+app.get("/auth/verify", (req, res) => {
+  res.json({
+    success: true,
+    authenticated: true,
+  });
 });
 
 // Logger de requisições (ignora spam de mousemove e polling frequente no console)
@@ -1217,7 +1234,8 @@ function persistEnvFiles({
     `SUPABASE_EMAIL=${cleanSupabaseEmail}`,
     `SUPABASE_PASSWORD=${cleanSupabasePassword}`,
     "",
-    "# Seguranca da API (Token exigido em todas as rotas de acao)",
+    "# Seguranca da API (Token Bearer exigido em todas as rotas e WebSocket)",
+    `AUTH_TOKEN=${cleanApiToken}`,
     `API_TOKEN=${cleanApiToken}`,
     `VITE_API_TOKEN=${cleanApiToken}`,
     "",
@@ -1235,6 +1253,7 @@ function persistEnvFiles({
     `SUPABASE_KEY=${cleanSupabaseKey}`,
     `SUPABASE_EMAIL=${cleanSupabaseEmail}`,
     `SUPABASE_PASSWORD=${cleanSupabasePassword}`,
+    `AUTH_TOKEN=${cleanApiToken}`,
     `API_TOKEN=${cleanApiToken}`,
     "",
   ].join("\n");
@@ -1265,6 +1284,7 @@ function persistEnvFiles({
   process.env.SUPABASE_KEY = cleanSupabaseKey;
   process.env.SUPABASE_EMAIL = cleanSupabaseEmail;
   process.env.SUPABASE_PASSWORD = cleanSupabasePassword;
+  process.env.AUTH_TOKEN = cleanApiToken;
   process.env.API_TOKEN = cleanApiToken;
 
   SERVER_IP = cleanIp;
@@ -2201,6 +2221,7 @@ async function finishActiveGameSession(targetId = null) {
   }
 
   ignoreDetectionFor(closed);
+  wsManager.broadcastActiveGames({ closedGame: closed });
 
   return closed;
 }
@@ -2209,8 +2230,8 @@ async function finishActiveGameSession(targetId = null) {
 // DETECÇÃO AUTOMÁTICA DE JOGOS ABERTOS FORA DO LAUNCHER
 // =========================
 
-const ACTIVE_GAME_MONITOR_INTERVAL_MS = 8000;
-const PROCESS_LIST_CACHE_MS = 3000;
+const ACTIVE_GAME_MONITOR_INTERVAL_MS = 4000;
+const PROCESS_LIST_CACHE_MS = 2500;
 const IGNORE_AFTER_CLOSE_MS = 20000;
 
 // Executáveis genéricos e clientes/launchers de loja: ficam abertos sem nenhum jogo rodando
@@ -2478,6 +2499,7 @@ async function adoptDetectedGame({ game, via, pid, exeName }) {
     `[Auto-Detect] Jogo detectado fora do launcher: ${game.name} ` +
       `(${via === "steam" ? `Steam AppID ${game.steamId}` : `${activeExe}, PID ${pid}`})`
   );
+  wsManager.broadcastActiveGames({ startedGame: newActive });
 }
 
 // Inicializa biblioteca
@@ -3390,6 +3412,7 @@ app.post("/play", systemActionLimiter, async (req, res) => {
 
     activeGames.set(game.id, newActiveGame);
     activeGame = newActiveGame;
+    wsManager.broadcastActiveGames({ startedGame: newActiveGame });
 
     // Detecta o PID nos primeiros segundos
     setTimeout(async () => {
@@ -3401,6 +3424,7 @@ app.post("/play", systemActionLimiter, async (req, res) => {
           target.exeName = found.exeName;
           target.seenRunning = true;
           console.log(`PID detectado para ${target.name}: ${found.pid} (${found.exeName})`);
+          wsManager.broadcastActiveGames();
         }
       }
     }, 2000);
@@ -3680,8 +3704,11 @@ app.get("/system/audio", async (req, res) => {
       runSysControl("getaudiodevices"),
     ]);
 
-    let volData = { volume: 50, muted: false };
-    let devices = [];
+    let volData = {
+      volume: wsManager.audioState.volume ?? 50,
+      muted: Boolean(wsManager.audioState.muted),
+    };
+    let devices = wsManager.audioState.devices || [];
 
     try {
       volData = JSON.parse(volRaw);
@@ -3691,10 +3718,18 @@ app.get("/system/audio", async (req, res) => {
       devices = JSON.parse(devRaw);
     } catch {}
 
+    const resolvedVol = typeof volData.volume === "number" ? volData.volume : 50;
+    const resolvedMuted = Boolean(volData.muted);
+    const resolvedDevices = Array.isArray(devices) ? devices : [];
+
+    wsManager.audioState.volume = resolvedVol;
+    wsManager.audioState.muted = resolvedMuted;
+    wsManager.audioState.devices = resolvedDevices;
+
     res.json({
-      volume: typeof volData.volume === "number" ? volData.volume : 50,
-      muted: Boolean(volData.muted),
-      devices: Array.isArray(devices) ? devices : [],
+      volume: resolvedVol,
+      muted: resolvedMuted,
+      devices: resolvedDevices,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -3726,6 +3761,16 @@ app.post("/system/audio/device", async (req, res) => {
     try {
       devices = JSON.parse(devRaw);
     } catch {}
+    wsManager.audioState.devices = Array.isArray(devices) ? devices : [];
+    wsManager.broadcast({
+      type: "VOLUME_UPDATE",
+      value: wsManager.audioState.volume,
+      is_muted: wsManager.audioState.muted,
+      volume: wsManager.audioState.volume,
+      muted: wsManager.audioState.muted,
+      devices: wsManager.audioState.devices,
+      source: "device_switch",
+    });
     res.json({ success: true, devices });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -3780,6 +3825,8 @@ app.post("/system/display", async (req, res) => {
     const resolvedMode = parsed?.mode || (safeMode === "tv" ? "external" : safeMode === "pc" ? "internal" : safeMode);
     const label = parsed?.label || (resolvedMode === "external" ? "TV (Segunda tela somente)" : "Tela do PC (Tela do computador somente)");
 
+    wsManager.broadcastDisplayMode({ mode: resolvedMode, label });
+
     res.json({
       success: true,
       mode: resolvedMode,
@@ -3791,48 +3838,47 @@ app.post("/system/display", async (req, res) => {
 });
 
 // Controle de Volume do Windows (+, -, Mudo e Slider 0-100% com coalescência)
-let pendingVolumeVal = null;
-let flushingVolume = false;
-
-async function flushVolumeSet() {
-  if (flushingVolume) return;
-  flushingVolume = true;
-  while (pendingVolumeVal !== null) {
-    const val = pendingVolumeVal;
-    pendingVolumeVal = null;
-    await runSysControl("setvol", String(val));
-  }
-  flushingVolume = false;
-}
-
 app.post("/system/volume", async (req, res) => {
   const { action, value } = req.body || {};
   try {
-    let out = "";
-    const stepStr = String(
-      Math.max(1, Math.min(20, Math.round(Number(automationSettings.volumeStep) || 3)))
-    );
-    if (action === "up") {
-      out = await runSysControl("volup", stepStr);
-    } else if (action === "down") {
-      out = await runSysControl("voldown", stepStr);
+    const stepNum = Math.max(1, Math.min(20, Math.round(Number(automationSettings.volumeStep) || 3)));
+    if (action === "up" || action === "down") {
+      const delta = action === "down" ? -stepNum : stepNum;
+      const clamped = Math.max(0, Math.min(100, Math.round((wsManager.audioState.volume ?? 50) + delta)));
+      wsManager.applyVolumeFromClient(null, {
+        mode: "set",
+        value: clamped,
+        muted: delta > 0 ? false : wsManager.audioState.muted,
+      });
+      return res.json({
+        success: true,
+        action,
+        volume: wsManager.audioState.volume,
+        muted: wsManager.audioState.muted,
+      });
     } else if (action === "mute") {
-      out = await runSysControl("volmute");
+      wsManager.applyVolumeFromClient(null, {
+        mode: "mute",
+        value: wsManager.audioState.volume,
+        muted: !wsManager.audioState.muted,
+      });
+      return res.json({
+        success: true,
+        action,
+        volume: wsManager.audioState.volume,
+        muted: wsManager.audioState.muted,
+      });
     } else if (action === "set" && typeof value === "number") {
       const clamped = Math.max(0, Math.min(100, Math.round(value)));
-      pendingVolumeVal = clamped;
-      flushVolumeSet();
+      wsManager.applyVolumeFromClient(null, {
+        mode: "set",
+        value: clamped,
+        muted: clamped === 0 ? wsManager.audioState.muted : false,
+      });
       return res.json({ success: true, action, volume: clamped, muted: false });
     } else {
       return res.status(400).json({ success: false, message: "Ação de volume inválida" });
     }
-
-    let volState = {};
-    try {
-      volState = JSON.parse(out);
-    } catch {}
-
-    res.json({ success: true, action, ...volState });
   } catch (error) {
     console.error("Erro volume:", error);
     res.status(500).json({ success: false, message: error.message });
@@ -4061,10 +4107,69 @@ app.post("/system/wake", systemActionLimiter, (req, res) => {
 });
 
 // =========================
-// SERVER
+// SERVER & WEBSOCKET (/ws)
 // =========================
 
-app.listen(PORT, "0.0.0.0", () => {
+const server = http.createServer(app);
+
+wsManager.configure({
+  sysControlBin: SYSCONTROL_BIN,
+  runSysControl,
+  isAllowedClientIp,
+  isAllowedOrigin,
+  verifyToken: (token) => verifyTokenTimingSafe(token, API_TOKEN),
+  getHostStatusPayload: () => ({
+    status: "online",
+    games: games.length,
+    serverIp: SERVER_IP,
+    port: PORT,
+    frontendPort: FRONTEND_PORT,
+  }),
+  getActiveGamesPayload: () => {
+    const list = Array.from(activeGames.values());
+    return {
+      activeGame: activeGame || list[0] || null,
+      activeGames: list,
+      hasMultiple: list.length > 1,
+      count: list.length,
+    };
+  },
+  getSystemStatsPayload: () => {
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const ramPercent = Math.round((usedMem / totalMem) * 100);
+    return {
+      cpuPercent: currentCpuUsage,
+      ramPercent,
+      ramUsedGB: (usedMem / (1024 ** 3)).toFixed(1),
+      ramTotalGB: (totalMem / (1024 ** 3)).toFixed(1),
+      uptimeHours: (os.uptime() / 3600).toFixed(1),
+      hostname: os.hostname(),
+    };
+  },
+  getDisplayPayload: async () => {
+    try {
+      const raw = await runSysControl("getdisplay");
+      let displayData = { mode: "internal", label: "Tela do PC" };
+      if (raw && raw.trim().startsWith("{")) {
+        displayData = JSON.parse(raw.trim());
+      }
+      return {
+        mode: displayData.mode || "internal",
+        label: displayData.label || "Tela do PC",
+      };
+    } catch {
+      return null;
+    }
+  },
+  getVolumeStep: () =>
+    Math.max(1, Math.min(20, Math.round(Number(automationSettings.volumeStep) || 3))),
+});
+
+wsManager.attachServer(server);
+
+server.listen(PORT, "0.0.0.0", () => {
   console.clear();
 
   console.log(`
@@ -4074,6 +4179,9 @@ app.listen(PORT, "0.0.0.0", () => {
 
 API (Backend):
 http://${SERVER_IP}:${PORT}
+
+WebSocket (Real-Time):
+ws://${SERVER_IP}:${PORT}/ws
 
 App (Frontend):
 http://${SERVER_IP}:${FRONTEND_PORT}

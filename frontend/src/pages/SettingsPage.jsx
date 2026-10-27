@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
+import { setApiToken } from "../api";
 
 export default function SettingsPage({
   api,
@@ -349,6 +350,9 @@ export default function SettingsPage({
       });
 
       if (res.data?.success) {
+        if (newApiToken) {
+          setApiToken(newApiToken, { remember: true });
+        }
         showToast(res.data.message || "Configurações salvas com sucesso!", "success");
         if (onReloadGames) onReloadGames();
 

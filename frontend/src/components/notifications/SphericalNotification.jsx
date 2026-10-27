@@ -1,12 +1,13 @@
 import React from "react";
 import { X, Rocket, CheckCircle2 } from "lucide-react";
-import { coverUrl } from "../../api";
+import { useImageCache } from "../../hooks/useImageCache";
 
 export default function SphericalNotification({ notification, isLeaving, onDismiss }) {
+  const { src: coverSrc, onError: handleCoverError } = useImageCache(notification?.cover);
+
   if (!notification) return null;
 
   const isEnded = notification.kind === "ended";
-  const coverSrc = coverUrl(notification.cover);
 
   return (
     <div
@@ -27,6 +28,7 @@ export default function SphericalNotification({ notification, isLeaving, onDismi
               alt={notification.name}
               className="launch-toast-thumb"
               loading="eager"
+              onError={handleCoverError}
             />
           ) : (
             <div className="launch-toast-thumb placeholder">🎮</div>

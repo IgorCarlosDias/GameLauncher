@@ -42,6 +42,7 @@ export default function QuickBar({ pc, audio, onOpenPower }) {
       <Slider
         label="Volume do PC"
         value={audio.muted ? 0 : audio.volume}
+        onDragStart={audio.startDrag}
         onChange={audio.setLevel}
         onCommit={audio.commitLevel}
         disabled={disabled}

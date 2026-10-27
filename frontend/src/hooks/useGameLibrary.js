@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { errorMessage, gamesApi } from "../api";
 import { haptic } from "../lib/haptics";
+import { preloadGameCovers } from "../lib/imageCache";
 
 /** Catálogo de jogos: carga, rescan, favoritos e edição. Sem nenhum conhecimento de UI. */
 export function useGameLibrary({ toast }) {
@@ -15,6 +16,7 @@ export function useGameLibrary({ toast }) {
         setError("");
         const list = await gamesApi.list();
         setGames(list);
+        preloadGameCovers(list);
         if (notify) toast.show(`Biblioteca sincronizada: ${list.length} jogos`, "success");
       } catch {
         setError("Não foi possível conectar ao servidor GameLauncher no PC.");
