@@ -24,7 +24,11 @@ if %errorlevel% neq 0 (
 cd /d "%~dp0"
 
 :: Encerra processos presos nas portas do GameLauncher para evitar conflitos (ex: porta 8060 -> 8061)
-powershell -NoProfile -Command "$ports = @(3060, 8060); Get-NetTCPConnection -LocalPort $ports -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+powershell -NoProfile -Command "$ports = @(3060, 8060); Get-NetTCPConnection -LocalPort $ports -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }; Stop-Process -Name syscontrol -Force -ErrorAction SilentlyContinue" >nul 2>&1
+
+if exist "backend\syscontrol_new.exe" (
+    move /y "backend\syscontrol_new.exe" "backend\syscontrol.exe" >nul 2>&1
+)
 
 if "!IS_HIDDEN!"=="0" (
     echo ==============================================

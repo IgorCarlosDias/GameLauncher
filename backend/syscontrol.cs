@@ -5,6 +5,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using Microsoft.Win32;
 
 namespace SysControl {
     // ==========================================
@@ -656,6 +657,7 @@ namespace SysControl {
             int lastEmittedVol = -1;
             bool lastEmittedMuted = false;
 
+            bool stdinClosed = false;
             // Thread assíncrona para receber comandos rápidos via stdin e acordar o loop principal imediatamente
             Thread stdinThread = new Thread(() => {
                 try {
@@ -669,11 +671,14 @@ namespace SysControl {
                         signal.Set();
                     }
                 } catch { }
+                stdinClosed = true;
+                signal.Set();
             });
             stdinThread.IsBackground = true;
             stdinThread.Start();
 
             while (true) {
+                if (stdinClosed) break;
                 try {
                     if (enumerator == null) {
                         enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
@@ -1159,6 +1164,45 @@ namespace SysControl {
                         Console.WriteLine("{\"x\":0,\"y\":0}");
                     }
                     break;
+                case "listprocesses":
+                    try {
+                        StringBuilder sb = new StringBuilder();
+                        Process[] procs = Process.GetProcesses();
+                        for (int i = 0; i < procs.Length; i++) {
+                            try {
+                                sb.Append(procs[i].ProcessName).Append(".exe,").Append(procs[i].Id).Append("\n");
+                            } catch { }
+                        }
+                        Console.Write(sb.ToString());
+                    } catch { }
+                    break;
+                case "getstarttime":
+                    if (args.Length > 1) {
+                        int pidVal;
+                        if (int.TryParse(args[1], out pidVal) && pidVal > 0) {
+                            try {
+                                Process p = Process.GetProcessById(pidVal);
+                                Console.Write(p.StartTime.ToUniversalTime().ToString("o"));
+                            } catch { }
+                        }
+                    }
+                    break;
+                case "steamrunningappid":
+                    try {
+                        using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam")) {
+                            if (key != null) {
+                                object val = key.GetValue("RunningAppId");
+                                if (val != null) {
+                                    int appId = Convert.ToInt32(val);
+                                    if (appId > 0) {
+                                        Console.Write(appId.ToString());
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    } catch { }
+                    break;
                 case "deskinfo":
                     POINT p1, p2;
                     bool g1 = GetCursorPos(out p1);
@@ -1177,6 +1221,10 @@ namespace SysControl {
         static void Main(string[] args) {
             Console.OutputEncoding = Encoding.UTF8;
             if (args.Length == 0) return;
+
+            try {
+                Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.BelowNormal;
+            } catch { }
 
             // Run on a dedicated fresh thread so SetThreadDesktop("Default") always succeeds
             Thread worker = new Thread(() => ExecuteCommand(args));

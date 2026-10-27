@@ -12,6 +12,15 @@ const crypto = require("crypto");
 const { exec, execFile } = require("child_process");
 const axios = require("axios");
 
+// Otimização de Performance para Jogos (Windows NT Kernel):
+// Define a classe de prioridade do processo Node.js para BELOW_NORMAL_PRIORITY_CLASS.
+// Garante que o GameLauncher nunca dispute fatias de tempo de CPU com os motores dos jogos (1080p / Draw-calls).
+try {
+  os.setPriority(0, os.constants.priority.PRIORITY_BELOW_NORMAL);
+} catch (e) {
+  // Ignora caso restrito pelo ambiente
+}
+
 const { getGameCover, searchGameCovers, testSteamGridDbKey } = require("./services/steamgriddb");
 const { detectGameGenre, detectGenreFromLocalRules } = require("./services/genreDetector");
 const supabaseSync = require("./services/supabaseSync");
@@ -310,6 +319,9 @@ const ALLOWED_SYSCONTROL_ACTIONS = new Set([
   "launchb64",
   "cursorpos",
   "deskinfo",
+  "listprocesses",
+  "getstarttime",
+  "steamrunningappid",
 ]);
 
 function runSysControl(action, ...params) {
@@ -335,43 +347,25 @@ function runSysControl(action, ...params) {
   });
 }
 
-function findProcessPid(exeName) {
-  return new Promise((resolve) => {
-    if (!exeName) return resolve(null);
-    const safeExe = path.basename(String(exeName));
-    execFile(
-      "tasklist.exe",
-      ["/FI", `IMAGENAME eq ${safeExe}`, "/FO", "CSV", "/NH"],
-      { encoding: "utf8", windowsHide: true },
-      (err, stdout) => {
-        if (err || !stdout) return resolve(null);
-        const lines = stdout
-          .trim()
-          .split("\n")
-          .filter((l) => l.toLowerCase().includes(safeExe.toLowerCase()));
-        if (lines.length === 0) return resolve(null);
-        const parts = lines[0].split(",").map((p) => p.replace(/"/g, "").trim());
-        const pid = parseInt(parts[1], 10);
-        resolve(pid || null);
-      }
-    );
-  });
+async function findProcessPid(exeName) {
+  if (!exeName) return null;
+  const safeExe = path.basename(String(exeName)).toLowerCase();
+  const processes = await listRunningProcesses();
+  if (processes && processes.has(safeExe)) {
+    return processes.get(safeExe);
+  }
+  return null;
 }
 
 function isPidRunning(pid) {
-  return new Promise((resolve) => {
-    const numericPid = Number(pid);
-    if (!Number.isInteger(numericPid) || numericPid <= 0) return resolve(false);
-    execFile(
-      "tasklist.exe",
-      ["/FI", `PID eq ${numericPid}`, "/FO", "CSV", "/NH"],
-      { encoding: "utf8", windowsHide: true },
-      (err, stdout) => {
-        if (err || !stdout) return resolve(false);
-        resolve(stdout.includes(`"${numericPid}"`));
-      }
-    );
-  });
+  const numericPid = Number(pid);
+  if (!Number.isInteger(numericPid) || numericPid <= 0) return Promise.resolve(false);
+  try {
+    process.kill(numericPid, 0);
+    return Promise.resolve(true);
+  } catch (err) {
+    return Promise.resolve(err.code === "EPERM");
+  }
 }
 
 // Monitoramento de CPU em tempo real via amostragem de ticks do Node os.cpus()
@@ -2279,11 +2273,37 @@ function ignoreDetectionFor(session) {
 let processListCache = { at: 0, map: null };
 
 // Lista todos os processos do Windows de uma só vez: nome do executável (minúsculo) -> PID
-function listRunningProcesses() {
+// Prioriza o syscontrol nativo em C# (2ms, sem criar novos processos de console como tasklist.exe)
+async function listRunningProcesses() {
   if (processListCache.map && Date.now() - processListCache.at < PROCESS_LIST_CACHE_MS) {
-    return Promise.resolve(processListCache.map);
+    return processListCache.map;
   }
 
+  // 1. Tenta via syscontrol nativo (C# Process.GetProcesses() - sem overhead de tasklist.exe)
+  try {
+    const raw = await runSysControl("listprocesses");
+    if (raw && typeof raw === "string" && raw.length > 10) {
+      const map = new Map();
+      const lines = raw.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const commaIdx = line.lastIndexOf(",");
+        if (commaIdx === -1) continue;
+        const name = line.substring(0, commaIdx).toLowerCase();
+        const pid = parseInt(line.substring(commaIdx + 1), 10);
+        if (name && pid && !map.has(name)) {
+          map.set(name, pid);
+        }
+      }
+      if (map.size > 0) {
+        processListCache = { at: Date.now(), map };
+        return map;
+      }
+    }
+  } catch {}
+
+  // 2. Fallback seguro caso o syscontrol não esteja disponível
   return new Promise((resolve) => {
     exec(
       "tasklist /FO CSV /NH",
@@ -2306,8 +2326,17 @@ function listRunningProcesses() {
   });
 }
 
-// AppID do jogo Steam em execução (a Steam grava em tempo real no Registro do usuário)
-function getSteamRunningAppId() {
+// AppID do jogo Steam em execução
+// Consulta direto o Registro pelo syscontrol nativo em C# (0.01ms, sem spawn de reg.exe)
+async function getSteamRunningAppId() {
+  try {
+    const res = await runSysControl("steamrunningappid");
+    if (res && /^\d+$/.test(res.trim())) {
+      const appId = parseInt(res.trim(), 10);
+      if (appId > 0) return String(appId);
+    }
+  } catch {}
+
   return new Promise((resolve) => {
     exec(
       'reg query "HKCU\\Software\\Valve\\Steam" /v RunningAppID',
@@ -2324,9 +2353,21 @@ function getSteamRunningAppId() {
 }
 
 // Horário real em que o processo foi iniciado (para o cronômetro refletir o tempo já jogado)
-function getProcessStartTime(pid) {
+// Consulta via syscontrol nativo em C# (1ms, sem spawn de powershell.exe)
+async function getProcessStartTime(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+
+  try {
+    const raw = await runSysControl("getstarttime", String(pid));
+    if (raw && typeof raw === "string") {
+      const startedMs = new Date(raw.trim()).getTime();
+      if (Number.isFinite(startedMs) && startedMs <= Date.now()) {
+        return new Date(startedMs).toISOString();
+      }
+    }
+  } catch {}
+
   return new Promise((resolve) => {
-    if (!Number.isInteger(pid) || pid <= 0) return resolve(null);
     exec(
       `powershell -NoProfile -NonInteractive -Command "(Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString('o')"`,
       { encoding: "utf8", timeout: 6000, windowsHide: true },
@@ -3453,6 +3494,7 @@ app.post("/play", systemActionLimiter, async (req, res) => {
 //  - para cada jogo ativo: confirma que ainda está rodando e encerra a respectiva sessão quando fechar;
 //  - varre o sistema para detectar novos jogos abertos (fora do launcher ou simultâneos).
 let syncingActiveGame = null;
+let externalGameDetectionCounter = 0;
 
 function syncActiveGameState() {
   if (syncingActiveGame) return syncingActiveGame;
@@ -3501,8 +3543,14 @@ function syncActiveGameState() {
         }
       }
 
-      // 2. Busca todos os jogos da biblioteca atualmente em execução no Windows (se autoDetectGames estiver ativo)
-      if (automationSettings.autoDetectGames !== false) {
+      // 2. Busca jogos da biblioteca em execução (se autoDetectGames estiver ativo)
+      // Se já houver um jogo ativo em execução, relaxa a verificação para economizar ciclos de CPU do jogo
+      externalGameDetectionCounter++;
+      const shouldDetectExternal =
+        automationSettings.autoDetectGames !== false &&
+        (activeGames.size === 0 || externalGameDetectionCounter % 4 === 0);
+
+      if (shouldDetectExternal) {
         const candidates = await detectExternalGames();
         for (const candidate of candidates) {
           if (!activeGames.has(candidate.game.id)) {

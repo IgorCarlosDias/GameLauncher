@@ -12,6 +12,6 @@ if %errorlevel% neq 0 (
 
 echo Encerrando GameLauncher...
 
-powershell -NoProfile -Command "$ports = @(3060, 8060); Get-NetTCPConnection -LocalPort $ports -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -Command "$ports = @(3060, 8060); Get-NetTCPConnection -LocalPort $ports -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }; Stop-Process -Name syscontrol -Force -ErrorAction SilentlyContinue"
 
 echo GameLauncher encerrado com sucesso.
