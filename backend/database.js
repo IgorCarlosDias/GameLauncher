@@ -45,7 +45,8 @@ async function initDatabase() {
       play_time INTEGER DEFAULT 0,
       play_count INTEGER DEFAULT 0,
       favorite INTEGER DEFAULT 0,
-      last_played TEXT
+      last_played TEXT,
+      genre TEXT
     )
   `);
 
@@ -59,6 +60,7 @@ async function initDatabase() {
     ["cover", "ALTER TABLE games ADD COLUMN cover TEXT"],
     ["resolved_exe", "ALTER TABLE games ADD COLUMN resolved_exe TEXT"],
     ["last_played", "ALTER TABLE games ADD COLUMN last_played TEXT"],
+    ["genre", "ALTER TABLE games ADD COLUMN genre TEXT"],
   ];
 
   for (const [col, sql] of migrations) {

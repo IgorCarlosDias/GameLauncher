@@ -1,14 +1,17 @@
-import { ArrowUpDown, LayoutGrid, List, Search, X } from "lucide-react";
+import { ArrowUpDown, LayoutGrid, List, Search, Tag, X } from "lucide-react";
 import { FILTERS, SORTS } from "../../lib/games";
 import { haptic } from "../../lib/haptics";
 
-/** Busca + chips de plataforma + ordenação + modo de visualização (fixo no topo da lista). */
+/** Busca + chips de plataforma + chips de gênero + ordenação + modo de visualização (fixo no topo da lista). */
 export default function LibraryToolbar({
   search,
   onSearch,
   filter,
   onFilter,
   counts,
+  genre = "all",
+  onGenre,
+  genres = [],
   sortBy,
   onSort,
   viewMode,
@@ -103,6 +106,40 @@ export default function LibraryToolbar({
           </select>
         </label>
       </div>
+
+      {genres.length > 0 && onGenre && (
+        <div className="toolbar__row toolbar__row--genres">
+          <div className="chips chips--genres" role="group" aria-label="Filtrar por gênero">
+            <button
+              type="button"
+              className={`chip chip--genre${genre === "all" ? " is-active" : ""}`}
+              onClick={() => {
+                haptic.tap();
+                onGenre("all");
+              }}
+              aria-pressed={genre === "all"}
+            >
+              <Tag size={12} aria-hidden="true" />
+              Todos os gêneros
+            </button>
+            {genres.map(({ id, label, count }) => (
+              <button
+                key={id}
+                type="button"
+                className={`chip chip--genre${genre === id ? " is-active" : ""}`}
+                onClick={() => {
+                  haptic.tap();
+                  onGenre(genre === id ? "all" : id);
+                }}
+                aria-pressed={genre === id}
+              >
+                {label}
+                <span className="chip__count">{count}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { AlertTriangle, CheckCircle2, Loader2, Power, Radio } from "lucide-react";
+import { vibrate } from "../../lib/haptics";
 
 const VISUALS = {
   idle: { Icon: Power, label: "Ligar PC", busy: false },
@@ -13,11 +14,16 @@ export default function WakeButton({ online, wakeState, onWake }) {
   const visual = online && wakeState === "idle" ? { Icon: CheckCircle2, label: "Ligado", busy: false } : VISUALS[wakeState];
   const { Icon, label, busy } = visual;
 
+  const handleClick = (e) => {
+    vibrate(online ? 15 : [25, 35, 40]);
+    onWake?.(e);
+  };
+
   return (
     <button
       type="button"
       className={`wake-btn wake-btn--${wakeState}${online ? " is-online" : ""}`}
-      onClick={onWake}
+      onClick={handleClick}
       disabled={busy}
       aria-busy={busy}
       aria-label={online ? "PC online" : "Ligar PC com Wake-on-LAN"}

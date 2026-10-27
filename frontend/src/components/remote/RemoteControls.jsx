@@ -36,7 +36,11 @@ export default function RemoteControls({
   const { stats, displayMode, switching, switchDisplay } = remoteInfo;
 
   async function handleKey(key, label) {
-    haptic.tap();
+    if (key === "enter") {
+      haptic.select();
+    } else {
+      haptic.tap();
+    }
     try {
       await systemApi.key(key);
       if (label) toast.show(label, "info");
@@ -56,7 +60,11 @@ export default function RemoteControls({
   }
 
   async function handleMouseClick(button) {
-    haptic.tap();
+    if (button === "double") {
+      haptic.double();
+    } else {
+      haptic.tap();
+    }
     try {
       await systemApi.mouseClick(button);
     } catch {
@@ -300,7 +308,10 @@ export default function RemoteControls({
         <button
           type="button"
           className="btn btn-warning-soft btn-block mt-3"
-          onClick={onCloseGameSoft}
+          onClick={() => {
+            haptic.heavy();
+            onCloseGameSoft?.();
+          }}
           disabled={!pcOnline}
         >
           <XSquare size={18} />

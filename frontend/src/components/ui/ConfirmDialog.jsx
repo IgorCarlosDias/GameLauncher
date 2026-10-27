@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
 import { useDelayedUnmount } from "../../hooks/useDelayedUnmount";
 import { useEscapeKey } from "../../hooks/useEscapeKey";
+import { vibrate } from "../../lib/haptics";
 
 /** Confirmação centralizada. `tone="danger"` pinta a ação principal de vermelho. */
 export default function ConfirmDialog({
@@ -31,13 +32,23 @@ export default function ConfirmDialog({
         <h3 className="dialog__title">{title}</h3>
         {message && <p className="dialog__message">{message}</p>}
         <div className="modal-actions">
-          <button type="button" className="btn btn-secondary" onClick={onCancel}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              vibrate(15);
+              onCancel?.();
+            }}
+          >
             {cancelLabel}
           </button>
           <button
             type="button"
             className={`btn ${tone === "danger" ? "btn-danger" : "btn-primary"}`}
-            onClick={onConfirm}
+            onClick={() => {
+              vibrate(tone === "danger" ? [45, 30, 55] : 25);
+              onConfirm?.();
+            }}
             disabled={busy}
           >
             {confirmLabel}

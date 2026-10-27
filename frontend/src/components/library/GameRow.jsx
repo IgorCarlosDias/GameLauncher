@@ -2,18 +2,23 @@ import { memo } from "react";
 import { Clock, Gamepad2, Loader2, MoreHorizontal, Play, Star, Trophy } from "lucide-react";
 import PlatformBadge from "../ui/PlatformBadge";
 import { coverUrl } from "../../api";
-import { getPlatform } from "../../lib/games";
+import { getGameGenre, getPlatform } from "../../lib/games";
 import { formatPlayTime } from "../../lib/format";
 import { useLongPress } from "../../hooks/useLongPress";
+import { vibrate } from "../../lib/haptics";
 
 /** Variante em lista compacta (mesma interação do card: toque joga, segurar abre ações). */
 function GameRow({ game, running, launching, onLaunch, onOpenActions }) {
   const { holding, handlers } = useLongPress({
-    onPress: () => onLaunch(game),
+    onPress: () => {
+      vibrate(20);
+      onLaunch(game);
+    },
     onLongPress: () => onOpenActions(game),
   });
   const cover = coverUrl(game.cover);
   const playTime = formatPlayTime(game.playTime);
+  const genre = getGameGenre(game);
 
   return (
     <div className={`game-row${running ? " is-running" : ""}${holding ? " is-holding" : ""}`}>
@@ -33,6 +38,7 @@ function GameRow({ game, running, launching, onLaunch, onOpenActions }) {
           </strong>
           <span className="game-row__meta">
             <PlatformBadge platform={getPlatform(game)} compact />
+            {genre && <span className="genre-badge is-compact">{genre}</span>}
             <span>
               <Clock size={11} aria-hidden="true" /> {playTime || "Nunca jogado"}
             </span>
@@ -57,7 +63,10 @@ function GameRow({ game, running, launching, onLaunch, onOpenActions }) {
       <button
         type="button"
         className="icon-btn icon-btn--ghost"
-        onClick={() => onOpenActions(game)}
+        onClick={() => {
+          vibrate(15);
+          onOpenActions(game);
+        }}
         aria-label={`Mais ações para ${game.name}`}
       >
         <MoreHorizontal size={19} />

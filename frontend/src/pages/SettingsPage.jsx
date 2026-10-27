@@ -276,7 +276,11 @@ export default function SettingsPage({
     try {
       const res = await axios.post(`${api}/supabase/push`);
       if (res.data?.success) {
-        showToast("☁️ Tempos enviados para o Supabase com sucesso!", "success");
+        const achCount = res.data.achievementsSynced ?? 0;
+        showToast(
+          `☁️ Enviado ao Supabase (${res.data.gamesSynced || 0} jogos, ${achCount} conquistas)!`,
+          "success"
+        );
         checkSupabaseStatus();
       } else {
         showToast(res.data?.message || "Falha ao enviar", "error");
@@ -294,7 +298,11 @@ export default function SettingsPage({
     try {
       const res = await axios.post(`${api}/supabase/pull`, { mode });
       if (res.data?.success) {
-        showToast("📥 Tempos restaurados da nuvem!", "success");
+        const achCount = res.data.stats?.importedAchievements ?? 0;
+        showToast(
+          `📥 Dados e conquistas (${achCount}) restaurados da nuvem!`,
+          "success"
+        );
         checkSupabaseStatus();
         if (onReloadGames) onReloadGames();
       } else {
@@ -885,7 +893,7 @@ export default function SettingsPage({
                 <section className="settings-section-card">
                   <div className="section-card-header">
                     <h2>☁️ Sincronização em Nuvem (Supabase)</h2>
-                    <p>Faça backup automático do tempo de jogo, contador de sessões e estatísticas na nuvem.</p>
+                    <p>Faça backup automático do tempo de jogo, conquistas, contador de sessões e estatísticas na nuvem.</p>
                   </div>
 
                   {supabaseStatus && (

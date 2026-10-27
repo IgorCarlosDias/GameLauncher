@@ -11,6 +11,7 @@ let lastSyncStatus = {
   lastError: null,
   gamesSynced: 0,
   sessionsSynced: 0,
+  achievementsSynced: 0,
 };
 
 function getClient() {
@@ -182,7 +183,7 @@ async function testConnection() {
 }
 
 /**
- * Envia todos os dados locais (jogos, sessões, resumo) para o Supabase (Upsert atômico)
+ * Envia todos os dados locais (jogos, sessões, conquistas e resumo) para o Supabase (Upsert atômico)
  */
 async function pushPlaytimeToSupabase(payload) {
   const client = getClient();
@@ -198,19 +199,42 @@ async function pushPlaytimeToSupabase(payload) {
       throw new Error(authRes.error);
     }
 
-    // 1. Upsert em games_playtime
-    const gamesToUpsert = payload.games.map((g) => ({
-      game_identifier: getGameIdentifier(g),
-      name: g.name,
-      custom_name: g.customName || null,
-      steam_id: g.steamId ? String(g.steamId) : null,
-      play_time: Math.max(0, Math.round(Number(g.playTime) || 0)),
-      play_count: Math.max(0, Math.round(Number(g.playCount) || 0)),
-      favorite: Boolean(g.favorite),
-      last_played: g.lastPlayed || null,
-      updated_at: new Date().toISOString(),
-    }));
+    const nowIso = new Date().toISOString();
 
+    // 1. Upsert em games_playtime (deduplicado por game_identifier para evitar erro ON CONFLICT DO UPDATE)
+    const gamesByIdentifier = new Map();
+    for (const g of payload.games) {
+      const identifier = getGameIdentifier(g);
+      const row = {
+        game_identifier: identifier,
+        name: g.name,
+        custom_name: g.customName || null,
+        steam_id: g.steamId ? String(g.steamId) : null,
+        play_time: Math.max(0, Math.round(Number(g.playTime) || 0)),
+        play_count: Math.max(0, Math.round(Number(g.playCount) || 0)),
+        favorite: Boolean(g.favorite),
+        last_played: g.lastPlayed || null,
+        updated_at: nowIso,
+      };
+
+      if (!gamesByIdentifier.has(identifier)) {
+        gamesByIdentifier.set(identifier, row);
+      } else {
+        const existing = gamesByIdentifier.get(identifier);
+        existing.play_time = Math.max(existing.play_time, row.play_time);
+        existing.play_count = Math.max(existing.play_count, row.play_count);
+        existing.favorite = existing.favorite || row.favorite;
+        if (!existing.custom_name && row.custom_name) existing.custom_name = row.custom_name;
+        if (!existing.steam_id && row.steam_id) existing.steam_id = row.steam_id;
+        if (row.last_played) {
+          const prevMs = existing.last_played ? new Date(existing.last_played).getTime() : 0;
+          const nextMs = new Date(row.last_played).getTime();
+          if (nextMs > prevMs) existing.last_played = row.last_played;
+        }
+      }
+    }
+
+    const gamesToUpsert = Array.from(gamesByIdentifier.values());
     if (gamesToUpsert.length > 0) {
       const { error: gamesErr } = await client
         .from("games_playtime")
@@ -219,18 +243,25 @@ async function pushPlaytimeToSupabase(payload) {
       if (gamesErr) throw gamesErr;
     }
 
-    // 2. Upsert em game_sessions (apenas sessões válidas com data de início e fim)
+    // 2. Upsert em game_sessions (deduplicado por game_identifier + started_at)
     if (Array.isArray(payload.sessions) && payload.sessions.length > 0) {
-      const validSessions = payload.sessions
-        .filter((s) => s.startedAt && s.endedAt)
-        .map((s) => ({
-          game_identifier: s.gameId ? `game_id:${s.gameId}` : `local:${(s.gameOriginalName || s.gameName).toLowerCase()}`,
+      const sessionsMap = new Map();
+      for (const s of payload.sessions) {
+        if (!s.startedAt || !s.endedAt) continue;
+        const gameIdentifier = s.gameId
+          ? `game_id:${s.gameId}`
+          : `local:${(s.gameOriginalName || s.gameName || "jogo").toLowerCase()}`;
+        const key = `${gameIdentifier}|${s.startedAt}`;
+        sessionsMap.set(key, {
+          game_identifier: gameIdentifier,
           game_name: s.gameName || s.gameOriginalName || "Jogo",
           started_at: s.startedAt,
           ended_at: s.endedAt,
           duration: Math.max(0, Math.round(Number(s.duration) || 0)),
-        }));
+        });
+      }
 
+      const validSessions = Array.from(sessionsMap.values());
       if (validSessions.length > 0) {
         for (let i = 0; i < validSessions.length; i += 100) {
           const chunk = validSessions.slice(i, i + 100);
@@ -245,42 +276,95 @@ async function pushPlaytimeToSupabase(payload) {
       }
     }
 
-    // 3. Salva resumo e meta no launcher_meta
+    // 3. Salva resumo e conquistas completas em launcher_meta (funciona sem exigir migração manual de tabela)
+    const metaRows = [];
     if (payload.summary) {
-      const { error: metaErr } = await client.from("launcher_meta").upsert(
-        [
-          {
-            key: "playtime_summary",
-            value: payload.summary,
-            updated_at: new Date().toISOString(),
-          },
-        ],
-        { onConflict: "key" }
-      );
+      metaRows.push({
+        key: "playtime_summary",
+        value: payload.summary,
+        updated_at: nowIso,
+      });
+    }
+
+    const achievementsList = Array.isArray(payload.achievements) ? payload.achievements : [];
+    metaRows.push({
+      key: "achievements_data",
+      value: {
+        updatedAt: nowIso,
+        total: achievementsList.length,
+        unlocked: achievementsList.filter((a) => a.achieved).length,
+        items: achievementsList,
+      },
+      updated_at: nowIso,
+    });
+
+    if (metaRows.length > 0) {
+      const { error: metaErr } = await client
+        .from("launcher_meta")
+        .upsert(metaRows, { onConflict: "key" });
       if (metaErr) throw metaErr;
     }
 
+    // 4. Opcional: Se a tabela dedicada `game_achievements` existir no Supabase, sincroniza nela também
+    if (achievementsList.length > 0) {
+      const achMap = new Map();
+      for (const a of achievementsList) {
+        const gameIdentifier = a.steamId
+          ? `steam:${a.steamId}`
+          : `local:${(a.gameOriginalName || a.gameName || "").trim().toLowerCase()}`;
+        const uniqueKey = `${gameIdentifier}|${a.apiName}`;
+        achMap.set(uniqueKey, {
+          game_identifier: gameIdentifier,
+          game_name: a.gameName || a.gameOriginalName || "Jogo",
+          steam_id: a.steamId ? String(a.steamId) : null,
+          api_name: a.apiName,
+          name: a.name || a.apiName,
+          description: a.description || "",
+          icon_url: a.iconUrl || "",
+          icon_gray_url: a.iconGrayUrl || "",
+          hidden: Boolean(a.hidden),
+          achieved: Boolean(a.achieved),
+          unlock_time: Number(a.unlockTime) || 0,
+          updated_at: a.updatedAt || nowIso,
+        });
+      }
+
+      const achToUpsert = Array.from(achMap.values());
+      for (let i = 0; i < achToUpsert.length; i += 200) {
+        const chunk = achToUpsert.slice(i, i + 200);
+        const { error: achTableErr } = await client
+          .from("game_achievements")
+          .upsert(chunk, { onConflict: "game_identifier,api_name" });
+        if (achTableErr) {
+          // Se a tabela opcional game_achievements não existir, ignora silenciosamente pois launcher_meta já salvou
+          break;
+        }
+      }
+    }
+
     lastSyncStatus.connected = true;
-    lastSyncStatus.lastSyncAt = new Date().toISOString();
+    lastSyncStatus.lastSyncAt = nowIso;
     lastSyncStatus.lastError = null;
     lastSyncStatus.gamesSynced = gamesToUpsert.length;
     lastSyncStatus.sessionsSynced = payload.sessions ? payload.sessions.length : 0;
+    lastSyncStatus.achievementsSynced = achievementsList.length;
 
     return {
       success: true,
       gamesSynced: gamesToUpsert.length,
       sessionsSynced: lastSyncStatus.sessionsSynced,
+      achievementsSynced: achievementsList.length,
       syncedAt: lastSyncStatus.lastSyncAt,
     };
   } catch (err) {
     lastSyncStatus.lastError = err.message;
-    console.error("[Supabase Sync] Falha ao enviar tempos para a nuvem:", err.message);
+    console.error("[Supabase Sync] Falha ao enviar tempos e conquistas para a nuvem:", err.message);
     return { success: false, error: err.message };
   }
 }
 
 /**
- * Puxa todos os tempos salvos na nuvem do Supabase
+ * Puxa todos os tempos, sessões e conquistas salvos na nuvem do Supabase
  */
 async function pullPlaytimeFromSupabase() {
   const client = getClient();
@@ -298,11 +382,42 @@ async function pullPlaytimeFromSupabase() {
 
     if (gamesErr) throw gamesErr;
 
-    const { data: cloudMeta } = await client
+    const { data: cloudMetaRows } = await client
       .from("launcher_meta")
       .select("*")
-      .eq("key", "playtime_summary")
-      .maybeSingle();
+      .in("key", ["playtime_summary", "achievements_data"]);
+
+    const summaryMeta = (cloudMetaRows || []).find((r) => r.key === "playtime_summary");
+    const achievementsMeta = (cloudMetaRows || []).find((r) => r.key === "achievements_data");
+
+    let cloudAchievements = Array.isArray(achievementsMeta?.value?.items)
+      ? achievementsMeta.value.items
+      : [];
+
+    // Se não houver conquistas em launcher_meta, tenta ler da tabela dedicada game_achievements (se existir)
+    if (cloudAchievements.length === 0) {
+      const { data: tableAchievements, error: tableAchErr } = await client
+        .from("game_achievements")
+        .select("*")
+        .limit(5000);
+
+      if (!tableAchErr && Array.isArray(tableAchievements) && tableAchievements.length > 0) {
+        cloudAchievements = tableAchievements.map((r) => ({
+          gameIdentifier: r.game_identifier,
+          gameName: r.game_name,
+          steamId: r.steam_id,
+          apiName: r.api_name,
+          name: r.name,
+          description: r.description,
+          iconUrl: r.icon_url,
+          iconGrayUrl: r.icon_gray_url,
+          hidden: Boolean(r.hidden),
+          achieved: Boolean(r.achieved),
+          unlockTime: Number(r.unlock_time) || 0,
+          updatedAt: r.updated_at,
+        }));
+      }
+    }
 
     const { data: cloudSessions } = await client
       .from("game_sessions")
@@ -313,12 +428,14 @@ async function pullPlaytimeFromSupabase() {
     lastSyncStatus.connected = true;
     lastSyncStatus.lastSyncAt = new Date().toISOString();
     lastSyncStatus.lastError = null;
+    lastSyncStatus.achievementsSynced = cloudAchievements.length;
 
     return {
       success: true,
       games: cloudGames || [],
-      summary: cloudMeta?.value || null,
+      summary: summaryMeta?.value || null,
       sessions: cloudSessions || [],
+      achievements: cloudAchievements,
       syncedAt: lastSyncStatus.lastSyncAt,
     };
   } catch (err) {

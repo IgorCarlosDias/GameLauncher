@@ -71,7 +71,14 @@ export default function PowerSheet({ open, onClose, shutdownScheduled, timerSec,
           <h3>{ACTIONS[pending].label} o PC?</h3>
           <p>{confirmText(pending, timerSec)}</p>
           <div className="modal-actions">
-            <button type="button" className="btn btn-secondary" onClick={() => setPending(null)}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                haptic.tap();
+                setPending(null);
+              }}
+            >
               Voltar
             </button>
             <button

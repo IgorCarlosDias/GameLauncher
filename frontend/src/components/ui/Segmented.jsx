@@ -13,7 +13,7 @@ export default function Segmented({ options, value, onChange, label, className =
           className={`segmented__item${value === id ? " is-active" : ""}`}
           onClick={() => {
             if (value !== id) {
-              haptic.tap();
+              haptic.select();
               onChange(id);
             }
           }}

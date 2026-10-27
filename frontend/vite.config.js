@@ -1,6 +1,5 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
-import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 import fs from 'fs'
 
@@ -60,47 +59,6 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       subnetGuardPlugin,
-      VitePWA({
-        registerType: 'autoUpdate',
-        includeAssets: ['favicon.svg', 'gamepad.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
-        manifest: {
-          name: 'GameLauncher',
-          short_name: 'GameLauncher',
-          description: 'Central de jogos e controle remoto de TV',
-          theme_color: '#000000',
-          background_color: '#000000',
-          display: 'standalone',
-          orientation: 'any',
-          icons: [
-            {
-              src: '/pwa-192x192.png',
-              sizes: '192x192',
-              type: 'image/png',
-              purpose: 'any',
-            },
-            {
-              src: '/pwa-512x512.png',
-              sizes: '512x512',
-              type: 'image/png',
-              purpose: 'any maskable',
-            },
-            {
-              src: '/gamepad.svg',
-              sizes: '192x192 512x512',
-              type: 'image/svg+xml',
-              purpose: 'any maskable',
-            },
-            {
-              src: '/favicon.svg',
-              sizes: '48x48 96x96',
-              type: 'image/svg+xml',
-            },
-          ],
-        },
-        workbox: {
-          globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
-        },
-      }),
     ],
     envDir: path.resolve(process.cwd(), '..'),
     define: {

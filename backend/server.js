@@ -12,6 +12,7 @@ const { exec, execFile } = require("child_process");
 const axios = require("axios");
 
 const { getGameCover, searchGameCovers, testSteamGridDbKey } = require("./services/steamgriddb");
+const { detectGameGenre, detectGenreFromLocalRules } = require("./services/genreDetector");
 const supabaseSync = require("./services/supabaseSync");
 const { dbRun, dbGet, dbAll, initDatabase } = require("./database");
 // Helper para carregar serviço de conquistas com resolução dinâmica sem travar em cache antigo
@@ -1306,6 +1307,20 @@ async function buildPlaytimePayload() {
      LEFT JOIN games g ON s.game_id = g.id
      ORDER BY s.id ASC`
   );
+  const dbAchievements = await dbAll(
+    `SELECT a.*, g.name AS db_game_name, g.custom_name AS db_custom_name, g.path AS db_game_path, g.steam_id AS db_steam_id
+     FROM achievements a
+     LEFT JOIN games g ON a.game_id = g.id
+     ORDER BY a.game_id ASC, a.id ASC`
+  ).catch(() => []);
+
+  const achStatsByGameId = new Map();
+  for (const a of dbAchievements) {
+    const cur = achStatsByGameId.get(a.game_id) || { total: 0, unlocked: 0 };
+    cur.total += 1;
+    if (a.achieved === 1) cur.unlocked += 1;
+    achStatsByGameId.set(a.game_id, cur);
+  }
 
   const memById = new Map(games.map((g) => [g.id, g]));
   const mergedGames = dbGames.map((row) => {
@@ -1317,12 +1332,22 @@ async function buildPlaytimePayload() {
     const customName = (mem ? mem.customName : row.custom_name) || null;
     const originalName = row.name || mem?.originalName || "";
     const displayName = customName || originalName;
+    const genre =
+      (mem ? mem.genre : row.genre) ||
+      detectGenreFromLocalRules({
+        name: displayName,
+        originalName,
+        resolvedExe: row.resolved_exe,
+      }) ||
+      null;
+    const achStats = achStatsByGameId.get(row.id) || { total: 0, unlocked: 0 };
 
     return {
       id: row.id,
       name: displayName,
       originalName,
       customName,
+      genre,
       path: row.path,
       extension: row.extension,
       resolvedExe: row.resolved_exe,
@@ -1333,6 +1358,8 @@ async function buildPlaytimePayload() {
       playTimeFormatted: formatDurationText(playTime),
       playCount,
       lastPlayed,
+      achievementsTotal: achStats.total,
+      achievementsUnlocked: achStats.unlocked,
     };
   });
 
@@ -1356,6 +1383,29 @@ async function buildPlaytimePayload() {
       durationFormatted: formatDurationText(duration),
     };
   });
+
+  const formattedAchievements = dbAchievements.map((a) => {
+    const gameName = a.db_custom_name || a.db_game_name || `Jogo #${a.game_id}`;
+    return {
+      gameId: a.game_id,
+      gameName,
+      gameOriginalName: a.db_game_name || gameName,
+      gamePath: a.db_game_path || null,
+      steamId: a.steam_id || a.db_steam_id || null,
+      apiName: a.api_name,
+      name: a.name,
+      description: a.description || "",
+      iconUrl: a.icon_url || "",
+      iconGrayUrl: a.icon_gray_url || "",
+      hidden: Boolean(a.hidden),
+      achieved: Boolean(a.achieved),
+      unlockTime: Number(a.unlock_time) || 0,
+      updatedAt: a.updated_at || null,
+    };
+  });
+
+  const totalAchievementsCount = formattedAchievements.length;
+  const unlockedAchievementsCount = formattedAchievements.filter((a) => a.achieved).length;
 
   const gamesPlayTimeSeconds = mergedGames.reduce((acc, g) => acc + (Number(g.playTime) || 0), 0);
   const sessionsTotalDurationSeconds = formattedSessions.reduce(
@@ -1413,6 +1463,8 @@ async function buildPlaytimePayload() {
       playedGamesCount: playedGames.length,
       unplayedGamesCount: mergedGames.length - playedGames.length,
       favoritesCount: mergedGames.filter((g) => g.favorite).length,
+      totalAchievements: totalAchievementsCount,
+      unlockedAchievements: unlockedAchievementsCount,
       lastPlayedAt,
       lastPlayedGame,
       mostPlayedGame: topGame
@@ -1428,6 +1480,7 @@ async function buildPlaytimePayload() {
     },
     games: mergedGames,
     sessions: formattedSessions,
+    achievements: formattedAchievements,
   };
 }
 
@@ -1528,11 +1581,17 @@ async function importPlaytimeData(rawPayload, mode = "merge", options = { saveTo
     ? rawPayload
     : [];
   const incomingSessions = Array.isArray(rawPayload.sessions) ? rawPayload.sessions : [];
+  const incomingAchievements = Array.isArray(rawPayload.achievements) ? rawPayload.achievements : [];
   const incomingSummary =
     rawPayload.summary && typeof rawPayload.summary === "object" ? rawPayload.summary : null;
 
-  if (incomingGames.length === 0 && incomingSessions.length === 0 && !incomingSummary) {
-    throw new Error("O arquivo JSON não contém dados de jogos, sessões ou tempo de sofá.");
+  if (
+    incomingGames.length === 0 &&
+    incomingSessions.length === 0 &&
+    incomingAchievements.length === 0 &&
+    !incomingSummary
+  ) {
+    throw new Error("O arquivo JSON não contém dados de jogos, sessões, conquistas ou tempo de sofá.");
   }
 
   let dbGames = await dbAll("SELECT * FROM games");
@@ -1564,6 +1623,10 @@ async function importPlaytimeData(rawPayload, mode = "merge", options = { saveTo
     const resolvedCustomName = hasCustomName
       ? String(item.customName ?? item.custom_name ?? "").trim() || null
       : undefined;
+    const hasGenre = "genre" in item;
+    const resolvedGenre = hasGenre
+      ? String(item.genre ?? "").trim() || null
+      : undefined;
 
     if (matched) {
       matchedGamesCount++;
@@ -1576,6 +1639,7 @@ async function importPlaytimeData(rawPayload, mode = "merge", options = { saveTo
       let nextLastPlayed = matched.last_played || null;
       let nextFav = Boolean(matched.favorite);
       let nextCustomName = matched.custom_name || null;
+      let nextGenre = matched.genre || null;
 
       if (normalizedMode === "replace") {
         if (resolvedSec !== null) nextPlayTime = resolvedSec;
@@ -1584,6 +1648,7 @@ async function importPlaytimeData(rawPayload, mode = "merge", options = { saveTo
         if (hasLastField) nextLastPlayed = resolvedLast || null;
         if (resolvedFav !== undefined) nextFav = resolvedFav;
         if (resolvedCustomName !== undefined) nextCustomName = resolvedCustomName;
+        if (resolvedGenre !== undefined) nextGenre = resolvedGenre;
       } else {
         if (resolvedSec !== null) nextPlayTime = Math.max(nextPlayTime, resolvedSec);
         if (resolvedCount !== null) nextPlayCount = Math.max(nextPlayCount, resolvedCount);
@@ -1598,11 +1663,12 @@ async function importPlaytimeData(rawPayload, mode = "merge", options = { saveTo
         }
         if (resolvedFav) nextFav = true;
         if (!nextCustomName && resolvedCustomName) nextCustomName = resolvedCustomName;
+        if (!nextGenre && resolvedGenre) nextGenre = resolvedGenre;
       }
 
       await dbRun(
-        `UPDATE games SET play_time = ?, play_count = ?, last_played = ?, favorite = ?, custom_name = ? WHERE id = ?`,
-        [nextPlayTime, nextPlayCount, nextLastPlayed, nextFav ? 1 : 0, nextCustomName, matched.id]
+        `UPDATE games SET play_time = ?, play_count = ?, last_played = ?, favorite = ?, custom_name = ?, genre = ? WHERE id = ?`,
+        [nextPlayTime, nextPlayCount, nextLastPlayed, nextFav ? 1 : 0, nextCustomName, nextGenre, matched.id]
       );
 
       matched.play_time = nextPlayTime;
@@ -1610,6 +1676,7 @@ async function importPlaytimeData(rawPayload, mode = "merge", options = { saveTo
       matched.last_played = nextLastPlayed;
       matched.favorite = nextFav ? 1 : 0;
       matched.custom_name = nextCustomName;
+      matched.genre = nextGenre;
       updatedGamesCount++;
     } else if (item.path || item.file) {
       const insertPath = String(item.path || item.file).trim();
@@ -1618,11 +1685,19 @@ async function importPlaytimeData(rawPayload, mode = "merge", options = { saveTo
       const playTimeVal = resolvedSec !== null ? resolvedSec : 0;
       const playCountVal = resolvedCount !== null ? resolvedCount : playTimeVal > 0 ? 1 : 0;
       const favVal = resolvedFav ? 1 : 0;
+      const genreVal =
+        resolvedGenre ||
+        detectGenreFromLocalRules({
+          name: resolvedCustomName || rawName,
+          originalName: rawName,
+          resolvedExe: item.resolvedExe || item.resolved_exe || `${rawName}.exe`,
+        }) ||
+        null;
 
       try {
         const res = await dbRun(
-          `INSERT INTO games (name, custom_name, path, extension, cover, resolved_exe, steam_id, play_time, play_count, favorite, last_played)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO games (name, custom_name, path, extension, cover, resolved_exe, steam_id, play_time, play_count, favorite, last_played, genre)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             rawName,
             resolvedCustomName || null,
@@ -1635,6 +1710,7 @@ async function importPlaytimeData(rawPayload, mode = "merge", options = { saveTo
             playCountVal,
             favVal,
             resolvedLast || null,
+            genreVal,
           ]
         );
         if (item.id !== undefined) {
@@ -1711,6 +1787,91 @@ async function importPlaytimeData(rawPayload, mode = "merge", options = { saveTo
     }
   }
 
+  // Importar conquistas (achievements) da nuvem ou JSON
+  let importedAchievementsCount = 0;
+  if (incomingAchievements.length > 0) {
+    if (normalizedMode === "replace") {
+      await dbRun("DELETE FROM achievements");
+    }
+
+    const nowIso = new Date().toISOString();
+    for (const ach of incomingAchievements) {
+      if (!ach || typeof ach !== "object") continue;
+      const apiName = String(ach.apiName || ach.api_name || "").trim();
+      if (!apiName) continue;
+
+      let targetGameId = null;
+      const rawGameId = Number(ach.gameId ?? ach.game_id);
+      if (oldIdToNewId.has(rawGameId)) {
+        targetGameId = oldIdToNewId.get(rawGameId);
+      } else {
+        const matchedAchGame = matchGameRecord(
+          {
+            path: ach.gamePath,
+            steamId: ach.steamId || ach.steam_id,
+            originalName: ach.gameOriginalName,
+            name: ach.gameName,
+          },
+          dbGames
+        );
+        if (matchedAchGame) {
+          targetGameId = matchedAchGame.id;
+        }
+      }
+
+      if (!targetGameId) continue;
+
+      const steamIdVal = String(ach.steamId || ach.steam_id || "0").trim();
+      const nameVal = String(ach.name || apiName).trim();
+      const descVal = String(ach.description || "").trim();
+      const iconUrlVal = String(ach.iconUrl || ach.icon_url || "").trim();
+      const iconGrayUrlVal = String(ach.iconGrayUrl || ach.icon_gray_url || iconUrlVal).trim();
+      const hiddenVal = ach.hidden ? 1 : 0;
+      const achievedVal = ach.achieved ? 1 : 0;
+      const unlockTimeVal = Math.max(0, Math.round(Number(ach.unlockTime ?? ach.unlock_time) || 0));
+      const updatedAtVal = ach.updatedAt || ach.updated_at || nowIso;
+
+      try {
+        await dbRun(
+          `INSERT INTO achievements (
+            game_id, steam_id, api_name, name, description,
+            icon_url, icon_gray_url, hidden, achieved, unlock_time, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(game_id, api_name) DO UPDATE SET
+            steam_id = COALESCE(NULLIF(excluded.steam_id, '0'), achievements.steam_id),
+            name = COALESCE(NULLIF(excluded.name, ''), achievements.name),
+            description = CASE WHEN excluded.description != '' THEN excluded.description ELSE achievements.description END,
+            icon_url = CASE WHEN excluded.icon_url != '' THEN excluded.icon_url ELSE achievements.icon_url END,
+            icon_gray_url = CASE WHEN excluded.icon_gray_url != '' THEN excluded.icon_gray_url ELSE achievements.icon_gray_url END,
+            hidden = excluded.hidden,
+            achieved = MAX(achievements.achieved, excluded.achieved),
+            unlock_time = CASE
+              WHEN excluded.unlock_time > 0 AND (achievements.unlock_time = 0 OR excluded.unlock_time < achievements.unlock_time)
+              THEN excluded.unlock_time
+              ELSE achievements.unlock_time
+            END,
+            updated_at = excluded.updated_at`,
+          [
+            targetGameId,
+            steamIdVal,
+            apiName,
+            nameVal,
+            descVal,
+            iconUrlVal,
+            iconGrayUrlVal,
+            hiddenVal,
+            achievedVal,
+            unlockTimeVal,
+            updatedAtVal,
+          ]
+        );
+        importedAchievementsCount++;
+      } catch {
+        // Ignora erro individual de FK/constraint
+      }
+    }
+  }
+
   // Atualizar Tempo de Sofá (couchTimeSeconds / couchTimeOffsetSeconds)
   const totalDbPlayTime = dbGames.reduce((acc, g) => acc + (Number(g.play_time) || 0), 0);
   if (incomingSummary) {
@@ -1761,6 +1922,7 @@ async function importPlaytimeData(rawPayload, mode = "merge", options = { saveTo
       g.favorite = Boolean(row.favorite);
       g.customName = row.custom_name || "";
       g.name = row.custom_name || row.name;
+      g.genre = row.genre || g.genre || null;
     }
   }
 
@@ -1778,6 +1940,7 @@ async function importPlaytimeData(rawPayload, mode = "merge", options = { saveTo
     updatedGamesCount,
     insertedGamesCount,
     importedSessionsCount,
+    importedAchievementsCount,
     payload: savedPayload,
   };
 }
@@ -1893,24 +2056,35 @@ async function loadGames() {
         cover = await downloadCover(searchTitle);
       }
 
+      const finalSteamId = dbRow?.steam_id || steamId;
+      let genre = dbRow?.genre || null;
+      if (!genre) {
+        genre = await detectGameGenre({
+          name: searchTitle,
+          originalName: rawName,
+          resolvedExe,
+          steamId: finalSteamId,
+        });
+      }
+
       if (!dbRow) {
         const insertRes = await dbRun(
-          `INSERT INTO games (name, custom_name, path, extension, cover, resolved_exe, steam_id, play_time, play_count, favorite, last_played)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, NULL)`,
-          [rawName, null, file, ext, cover, resolvedExe, steamId]
+          `INSERT INTO games (name, custom_name, path, extension, cover, resolved_exe, steam_id, play_time, play_count, favorite, last_played, genre)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, NULL, ?)`,
+          [rawName, null, file, ext, cover, resolvedExe, finalSteamId, genre]
         );
         dbRow = await dbGet("SELECT * FROM games WHERE id = ?", [insertRes.lastID]);
       } else {
-        const finalSteamId = dbRow.steam_id || steamId;
         await dbRun(
-          `UPDATE games SET name = ?, extension = ?, cover = ?, resolved_exe = ?, steam_id = ? WHERE id = ?`,
-          [rawName, ext, cover, resolvedExe, finalSteamId, dbRow.id]
+          `UPDATE games SET name = ?, extension = ?, cover = ?, resolved_exe = ?, steam_id = ?, genre = ? WHERE id = ?`,
+          [rawName, ext, cover, resolvedExe, finalSteamId, genre, dbRow.id]
         );
         dbRow.name = rawName;
         dbRow.extension = ext;
         dbRow.cover = cover;
         dbRow.resolved_exe = resolvedExe;
         dbRow.steam_id = finalSteamId;
+        dbRow.genre = genre;
       }
 
       // Integra tempo de jogo e última sessão da Steam caso o jogo tenha steam_id
@@ -1944,6 +2118,7 @@ async function loadGames() {
         name: dbRow.custom_name || dbRow.name,
         originalName: dbRow.name,
         customName: dbRow.custom_name || "",
+        genre: dbRow.genre || genre || null,
         file: dbRow.path,
         extension: dbRow.extension,
         cover: dbRow.cover,
@@ -2339,11 +2514,20 @@ app.get("/games", async (req, res) => {
   res.json(
     games.map((game) => {
       const ach = achMap.get(game.id) || { total: 0, unlocked: 0 };
+      const genre =
+        game.genre ||
+        detectGenreFromLocalRules({
+          name: game.name,
+          originalName: game.originalName,
+          resolvedExe: game.resolvedExe,
+        }) ||
+        null;
       return {
         id: game.id,
         name: game.name,
         originalName: game.originalName,
         customName: game.customName,
+        genre,
         cover: game.cover,
         extension: game.extension,
         resolvedExe: game.resolvedExe,
@@ -2681,6 +2865,7 @@ app.post("/supabase/pull", async (req, res) => {
       {
         games: pullResult.games,
         sessions: pullResult.sessions,
+        achievements: pullResult.achievements,
         summary: pullResult.summary,
       },
       mode,
@@ -2694,6 +2879,7 @@ app.post("/supabase/pull", async (req, res) => {
         updatedGames: imported.updatedGamesCount,
         insertedGames: imported.insertedGamesCount,
         importedSessions: imported.importedSessionsCount,
+        importedAchievements: imported.importedAchievementsCount,
       },
       syncedAt: pullResult.syncedAt,
     });
@@ -2839,7 +3025,7 @@ app.put("/games/:id", async (req, res) => {
     return res.status(404).json({ success: false, message: "Jogo não encontrado" });
   }
 
-  const { customName, coverUrl, playTime, steamId } = req.body || {};
+  const { customName, coverUrl, playTime, steamId, genre } = req.body || {};
 
   try {
     if (typeof customName === "string") {
@@ -2864,6 +3050,21 @@ app.put("/games/:id", async (req, res) => {
           game.resolvedExe || game.file
         ).catch(() => {});
       }
+    }
+
+    if (genre !== undefined) {
+      const rawGenre = genre === null ? "" : String(genre).trim();
+      if (rawGenre.toLowerCase() === "auto") {
+        game.genre = await detectGameGenre({
+          name: game.name,
+          originalName: game.originalName,
+          resolvedExe: game.resolvedExe,
+          steamId: game.steamId,
+        });
+      } else {
+        game.genre = rawGenre || null;
+      }
+      await dbRun(`UPDATE games SET genre = ? WHERE id = ?`, [game.genre, id]);
     }
 
     if (playTime !== undefined && playTime !== null && playTime !== "") {
@@ -2951,6 +3152,7 @@ app.get("/games/:id/achievements", async (req, res) => {
           steamId64,
           targetExePath
         );
+        savePlaytimeJson().catch(() => {});
       } catch (syncErr) {
         console.warn(`[Achievements] Auto-sync para jogo ${game.name} falhou:`, syncErr.message);
       }
@@ -3019,6 +3221,8 @@ app.post("/games/:id/sync-achievements", async (req, res) => {
       targetExePath
     );
 
+    savePlaytimeJson().catch(() => {});
+
     res.json({
       success: true,
       gameId: game.id,
@@ -3079,6 +3283,10 @@ app.post("/steam/sync-all-achievements", async (req, res) => {
       } catch (err) {
         errors.push({ id: g.id, name: g.name, error: err.message });
       }
+    }
+
+    if (synced > 0) {
+      savePlaytimeJson().catch(() => {});
     }
 
     res.json({

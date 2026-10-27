@@ -2,8 +2,9 @@ import { Pencil, Play, Power, Square, Star, Trophy, XSquare } from "lucide-react
 import Sheet from "../ui/Sheet";
 import PlatformBadge from "../ui/PlatformBadge";
 import { coverUrl } from "../../api";
-import { getPlatform } from "../../lib/games";
+import { getGameGenre, getPlatform } from "../../lib/games";
 import { formatPlayTime } from "../../lib/format";
+import { vibrate } from "../../lib/haptics";
 
 function Action({ icon: Icon, label, hint, tone, onClick, disabled }) {
   return (
@@ -36,8 +37,10 @@ export default function GameActionsSheet({
   // Mantém os dados durante a animação de saída.
   const current = game || {};
   const cover = coverUrl(current.cover);
+  const genre = getGameGenre(current);
 
-  const act = (fn) => () => {
+  const act = (fn, pattern = 15) => () => {
+    vibrate(pattern);
     onClose();
     fn(current);
   };
@@ -53,7 +56,10 @@ export default function GameActionsSheet({
         <>
           <div className="actions-hero">
             <div className="actions-hero__cover">{cover && <img src={cover} alt="" decoding="async" />}</div>
-            <PlatformBadge platform={getPlatform(current)} />
+            <div className="actions-hero__badges">
+              <PlatformBadge platform={getPlatform(current)} />
+              {genre && <span className="genre-badge">{genre}</span>}
+            </div>
           </div>
 
           <div className="action-list">
@@ -65,7 +71,7 @@ export default function GameActionsSheet({
               label={current.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
               onClick={act(onFavorite)}
             />
-            <Action icon={Pencil} label="Editar jogo" hint="Nome, capa e Steam AppID" onClick={act(onEdit)} />
+            <Action icon={Pencil} label="Editar jogo" hint="Nome, gênero, capa e Steam AppID" onClick={act(onEdit)} />
             {(current.steamId || current.achievementsTotal > 0) && (
               <Action
                 icon={Trophy}

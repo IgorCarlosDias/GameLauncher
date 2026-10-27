@@ -1,6 +1,6 @@
 import { Loader2, Power, Volume1, Volume2, VolumeX } from "lucide-react";
 import Slider from "../ui/Slider";
-import { haptic } from "../../lib/haptics";
+import { haptic, vibrate } from "../../lib/haptics";
 
 function VolumeIcon({ muted, volume }) {
   if (muted || volume === 0) return <VolumeX size={21} />;
@@ -15,6 +15,11 @@ export default function QuickBar({ pc, audio, onOpenPower }) {
   const disabled = !pc.online;
   const waking = pc.wakeState === "sending" || pc.wakeState === "waiting";
 
+  const handleMute = () => {
+    vibrate(15);
+    audio.toggleMute();
+  };
+
   const handlePower = () => {
     haptic.select();
     if (pc.online) onOpenPower();
@@ -26,7 +31,7 @@ export default function QuickBar({ pc, audio, onOpenPower }) {
       <button
         type="button"
         className={`icon-btn quickbar__mute${audio.muted ? " is-active" : ""}`}
-        onClick={audio.toggleMute}
+        onClick={handleMute}
         disabled={disabled}
         aria-label={audio.muted ? "Ativar som" : "Silenciar"}
         aria-pressed={audio.muted}

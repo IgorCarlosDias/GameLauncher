@@ -2,9 +2,10 @@ import { memo } from "react";
 import { Clock, Gamepad2, Loader2, MoreHorizontal, Star, Trophy } from "lucide-react";
 import PlatformBadge from "../ui/PlatformBadge";
 import { coverUrl } from "../../api";
-import { getPlatform } from "../../lib/games";
+import { getGameGenre, getPlatform } from "../../lib/games";
 import { formatPlayTime } from "../../lib/format";
 import { useLongPress } from "../../hooks/useLongPress";
+import { vibrate } from "../../lib/haptics";
 
 const markLoaded = (el) => {
   if (el && el.complete && el.naturalWidth > 0) el.classList.add("is-loaded");
@@ -16,11 +17,15 @@ const markLoaded = (el) => {
  */
 function GameCard({ game, running, launching, variant = "grid", onLaunch, onOpenActions }) {
   const { holding, handlers } = useLongPress({
-    onPress: () => onLaunch(game),
+    onPress: () => {
+      vibrate(20);
+      onLaunch(game);
+    },
     onLongPress: () => onOpenActions(game),
   });
 
   const platform = getPlatform(game);
+  const genre = getGameGenre(game);
   const playTime = formatPlayTime(game.playTime);
   const cover = coverUrl(game.cover);
 
@@ -64,7 +69,10 @@ function GameCard({ game, running, launching, variant = "grid", onLaunch, onOpen
         <span className="game-card__shade" aria-hidden="true" />
 
         <span className="game-card__badges">
-          <PlatformBadge platform={platform} compact />
+          <span className="game-card__badges-left">
+            <PlatformBadge platform={platform} compact />
+            {genre && <span className="genre-badge is-compact">{genre}</span>}
+          </span>
           {game.favorite && (
             <span className="game-card__fav" aria-label="Favorito">
               <Star size={12} fill="currentColor" />
@@ -108,7 +116,10 @@ function GameCard({ game, running, launching, variant = "grid", onLaunch, onOpen
       <button
         type="button"
         className="game-card__more"
-        onClick={() => onOpenActions(game)}
+        onClick={() => {
+          vibrate(15);
+          onOpenActions(game);
+        }}
         aria-label={`Mais ações para ${game.name}`}
       >
         <MoreHorizontal size={18} />

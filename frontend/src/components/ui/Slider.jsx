@@ -48,7 +48,7 @@ export default function Slider({
     draggingRef.current = true;
     rootRef.current.setPointerCapture(e.pointerId);
     rootRef.current.dataset.dragging = "true";
-    haptic(8);
+    haptic.tick();
     onChange(valueFromPointer(e));
   };
 

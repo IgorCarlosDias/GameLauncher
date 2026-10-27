@@ -1,6 +1,7 @@
 import { EyeOff, Square } from "lucide-react";
 import LiveDuration from "../ui/LiveDuration";
 import { coverUrl } from "../../api";
+import { vibrate } from "../../lib/haptics";
 
 /** Banner “Jogando agora” com cronômetro ao vivo e encerramento rápido. */
 export default function NowPlaying({ activeGames, onForceClose, onDismiss }) {
@@ -30,7 +31,10 @@ export default function NowPlaying({ activeGames, onForceClose, onDismiss }) {
               <button
                 type="button"
                 className="icon-btn icon-btn--ghost"
-                onClick={() => onDismiss(game.id)}
+                onClick={() => {
+                  vibrate(15);
+                  onDismiss(game.id);
+                }}
                 aria-label={`Ocultar aviso de ${game.name}`}
               >
                 <EyeOff size={18} />
@@ -38,7 +42,10 @@ export default function NowPlaying({ activeGames, onForceClose, onDismiss }) {
               <button
                 type="button"
                 className="icon-btn icon-btn--danger"
-                onClick={() => onForceClose(game)}
+                onClick={() => {
+                  vibrate([30, 40, 30]);
+                  onForceClose(game);
+                }}
                 aria-label={`Encerrar ${game.name}`}
               >
                 <Square size={17} fill="currentColor" />

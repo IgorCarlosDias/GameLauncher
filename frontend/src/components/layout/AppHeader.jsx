@@ -16,7 +16,10 @@ export default function AppHeader({ pc, onRefresh, refreshing }) {
       <div className="app-header__brand">
         <img src="/gamepad.svg" alt="" className="app-header__logo" width="38" height="38" />
         <div className="app-header__text">
-          <h1 className="app-header__title">GameLauncher</h1>
+          <div className="app-header__title-row">
+            <h1 className="app-header__title">GameLauncher</h1>
+            <span className="app-header__version">v1.3.0</span>
+          </div>
           <p className={`status-pill status-pill--${pc.status}`} aria-live="polite">
             <span className="status-pill__dot" aria-hidden="true" />
             <span className="status-pill__state">{STATUS_TEXT[pc.status]}</span>

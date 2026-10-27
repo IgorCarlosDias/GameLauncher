@@ -11,7 +11,7 @@ import GameActionsSheet from "../components/library/GameActionsSheet";
 import EditGameSheet from "../components/library/EditGameSheet";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 
-import { filterAndSortGames, countByFilter, getRecentGames } from "../lib/games";
+import { filterAndSortGames, countByFilter, getAvailableGenres, getRecentGames } from "../lib/games";
 
 export default function LibraryPage({
   library,
@@ -27,6 +27,7 @@ export default function LibraryPage({
   // Filtros, Busca e Exibição
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all"); // 'all' | 'fav' | 'steam' | 'local'
+  const [genre, setGenre] = useState("all"); // 'all' | nome do gênero
   const [sortBy, setSortBy] = useState("default"); // 'default' | 'recent' | 'playtime' | 'az'
   const [viewMode, setViewMode] = useState("grid"); // 'grid' | 'list'
 
@@ -39,20 +40,25 @@ export default function LibraryPage({
   // Set de IDs dos jogos ativos para lookup O(1)
   const runningIds = useMemo(() => new Set(activeGames.map((g) => g.id)), [activeGames]);
 
-  // Contagens para os chips
+  // Contagens para os chips e gêneros disponíveis
   const counts = useMemo(() => countByFilter(games), [games]);
+  const genres = useMemo(() => getAvailableGenres(games), [games]);
+  const activeGenre = useMemo(
+    () => (genre !== "all" && !genres.some((g) => g.id === genre) ? "all" : genre),
+    [genre, genres]
+  );
 
   // Jogos filtrados e ordenados
   const displayedGames = useMemo(
-    () => filterAndSortGames(games, { search, filter, sortBy }),
-    [games, search, filter, sortBy]
+    () => filterAndSortGames(games, { search, filter, genre: activeGenre, sortBy }),
+    [games, search, filter, activeGenre, sortBy]
   );
 
   // Jogos recentes para o carrossel (apenas quando não há busca ativa)
   const recentGames = useMemo(() => {
-    if (search.trim() || filter !== "all") return [];
+    if (search.trim() || filter !== "all" || activeGenre !== "all") return [];
     return getRecentGames(games, 8);
-  }, [games, search, filter]);
+  }, [games, search, filter, activeGenre]);
 
   // Tempo total acumulado da biblioteca
   const totalSeconds = useMemo(
@@ -98,7 +104,7 @@ export default function LibraryPage({
       />
 
       {/* 2. Card de Telemetria Compacto */}
-      {!search && filter === "all" && (
+      {!search && filter === "all" && activeGenre === "all" && (
         <TelemetryCard
           session={currentSession}
           totalSeconds={totalSeconds}
@@ -118,13 +124,16 @@ export default function LibraryPage({
         />
       )}
 
-      {/* 4. Toolbar: Busca, Filtros, Ordenação e Grade/Lista */}
+      {/* 4. Toolbar: Busca, Filtros, Gêneros, Ordenação e Grade/Lista */}
       <LibraryToolbar
         search={search}
         onSearch={setSearch}
         filter={filter}
         onFilter={setFilter}
         counts={counts}
+        genre={activeGenre}
+        onGenre={setGenre}
+        genres={genres}
         sortBy={sortBy}
         onSort={setSortBy}
         viewMode={viewMode}
@@ -136,10 +145,11 @@ export default function LibraryPage({
         <LibrarySkeleton count={viewMode === "list" ? 8 : 6} viewMode={viewMode} />
       ) : displayedGames.length === 0 ? (
         <EmptyLibrary
-          hasFilter={Boolean(search.trim() || filter !== "all")}
+          hasFilter={Boolean(search.trim() || filter !== "all" || activeGenre !== "all")}
           onClearFilter={() => {
             setSearch("");
             setFilter("all");
+            setGenre("all");
           }}
           onRescan={rescan}
           refreshing={refreshing}

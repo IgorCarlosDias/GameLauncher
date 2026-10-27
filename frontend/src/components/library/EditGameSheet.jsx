@@ -4,13 +4,15 @@ import Sheet from "../ui/Sheet";
 import { useCoverSearch } from "../../hooks/useCoverSearch";
 import { useToast } from "../../hooks/useToast";
 import { formatPlayTime } from "../../lib/format";
+import { GENRES, getGameGenre } from "../../lib/games";
 
-/** Editor de jogo: nome, tempo jogado e galeria de capas do SteamGridDB. */
+/** Editor de jogo: nome, gênero, tempo jogado e galeria de capas do SteamGridDB. */
 export default function EditGameSheet({ game, saving, onClose, onSave, onAchievements }) {
   const toast = useToast();
   const covers = useCoverSearch({ toast });
 
   const [name, setName] = useState("");
+  const [genre, setGenre] = useState("auto");
   const [playTime, setPlayTime] = useState("");
   const [steamId, setSteamId] = useState("");
   const [query, setQuery] = useState("");
@@ -23,6 +25,7 @@ export default function EditGameSheet({ game, saving, onClose, onSave, onAchieve
   useEffect(() => {
     if (!gameId) return;
     setName(game.name);
+    setGenre(getGameGenre(game) || "auto");
     setPlayTime(formatPlayTime(game.playTime) || (game.playTime ? `${game.playTime}s` : "0m"));
     setSteamId(game.steamId || "");
     setQuery(game.name);
@@ -36,6 +39,7 @@ export default function EditGameSheet({ game, saving, onClose, onSave, onAchieve
   const submit = (coverUrl) =>
     onSave(game.id, {
       customName: name.trim(),
+      genre,
       coverUrl: coverUrl || customUrl.trim() || undefined,
       playTime: playTime.trim(),
       steamId: steamId.trim(),
@@ -72,6 +76,26 @@ export default function EditGameSheet({ game, saving, onClose, onSave, onAchieve
               placeholder={game.originalName}
               autoComplete="off"
             />
+          </label>
+
+          <label className="field">
+            <span className="field__label">Gênero principal</span>
+            <select
+              className="field__input"
+              value={genre}
+              onChange={(e) => setGenre(e.target.value)}
+            >
+              <option value="auto">✨ Detectar automaticamente</option>
+              {game.genre && !GENRES.includes(game.genre) && (
+                <option value={game.genre}>{game.genre}</option>
+              )}
+              {GENRES.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+              <option value="">Sem gênero</option>
+            </select>
           </label>
 
           <label className="field">
