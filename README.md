@@ -62,6 +62,11 @@ Com o **GameLauncher**, basta abrir o app (ou PWA) no celular para navegar pela 
 - **🖼️ Cache Local de Capas & Pré-Carregamento em Background**: Armazenamento offline de posters via Cache Storage API (`gamelauncher-covers-v1`) com fallback transparente para IndexedDB, carregamento a 0ms e pré-carregamento não bloqueante (`requestIdleCallback`).
 - **📱 Header Mobile Compacto**: Dimensões otimizadas e espaçamento reduzido para telas menores de smartphones, mantendo layout estendido em desktops via media queries.
 
+### 🖱️ Touchpad Virtual com Botões de Mouse Real & Otimizações (v1.5.0)
+- **🖱️ Botões Físicos de Mouse Real**: Dois botões dedicados (Botão Esquerdo e Botão Direito) integrados logo abaixo do Touchpad Virtual com ergonomia e estética de mouse físico (deck com fenda central, indicador de apoio tátil e ícones direcionais).
+- **⚡ Resposta Imediata & Háptica**: Disparo instantâneo com feedback háptico (`haptic.tap()`), animação mecânica de clique no estado ativo e prevenção de menu de contexto nativo do navegador.
+- **🚀 Otimizações de Desempenho no Backend**: Verificação nativa $O(1)$ de processos via `process.kill(pid, 0)`, delegação de tarefas pesadas ao `syscontrol.exe` em C# nativo, e execução com classe de prioridade otimizada para jogos.
+
 ---
 
 ## 🖥️ Arquitetura

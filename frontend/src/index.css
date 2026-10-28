@@ -1348,12 +1348,19 @@ img {
    TOUCHPAD CANVAS (TRACKPAD VIRTUAL)
    ========================================================================== */
 
+.touchpad-page-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
 .touchpad-fullscreen-wrapper {
   position: relative;
   width: 100%;
-  height: calc((100vh - 250px) * 0.7);
-  min-height: 265px;
-  max-height: 420px;
+  height: calc((100vh - 300px) * 0.68);
+  min-height: 240px;
+  max-height: 380px;
   border-radius: var(--radius-xl);
   overflow: hidden;
   background: radial-gradient(circle at center, #131320 0%, #08080d 100%);
@@ -1397,6 +1404,213 @@ img {
 
 .touchpad-watermark small {
   font-size: 0.72rem;
+}
+
+/* ==========================================================================
+   BOTOES DO MOUSE REAL (TOUCHPAD VIRTUAL)
+   ========================================================================== */
+
+.real-mouse-deck {
+  display: flex;
+  align-items: stretch;
+  position: relative;
+  width: 100%;
+  height: 82px;
+  background: linear-gradient(180deg, rgba(20, 20, 32, 0.9) 0%, rgba(12, 12, 18, 0.98) 100%);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-xl);
+  padding: 5px;
+  gap: 6px;
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-sizing: border-box;
+}
+
+/* Fenda / Entalhe sutil da roda de scroll central de um mouse real */
+.real-mouse-deck::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 6px;
+  height: 22px;
+  background: linear-gradient(180deg, #2a2a3e 0%, #151522 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.8), 0 0 8px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.real-mouse-btn {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  outline: none;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  background: radial-gradient(ellipse at 50% 15%, rgba(255, 255, 255, 0.06) 0%, transparent 65%),
+              linear-gradient(180deg, #1b1b2a 0%, #11111a 100%);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.12),
+              0 2px 6px rgba(0, 0, 0, 0.4);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  padding: 8px 14px;
+  transition: transform 90ms cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 90ms cubic-bezier(0.16, 1, 0.3, 1),
+              background 120ms ease,
+              border-color 120ms ease;
+  overflow: hidden;
+}
+
+.real-mouse-btn--left {
+  border-radius: 19px 6px 6px 19px;
+}
+
+.real-mouse-btn--right {
+  border-radius: 6px 19px 19px 6px;
+}
+
+/* Indicador tátil de apoio do dedo (ergonomia de mouse) */
+.real-mouse-btn-indicator {
+  position: absolute;
+  top: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  border-radius: 2px;
+  transition: all 120ms ease;
+}
+
+.real-mouse-btn--left .real-mouse-btn-indicator {
+  left: 15%;
+  right: 25%;
+}
+
+.real-mouse-btn--right .real-mouse-btn-indicator {
+  left: 25%;
+  right: 15%;
+}
+
+/* Efeito Hover em dispositivos desktop */
+@media (hover: hover) {
+  .real-mouse-btn:hover:not(:disabled) {
+    background: radial-gradient(ellipse at 50% 15%, rgba(139, 92, 246, 0.12) 0%, transparent 70%),
+                linear-gradient(180deg, #222236 0%, #151522 100%);
+    border-color: rgba(139, 92, 246, 0.35);
+  }
+
+  .real-mouse-btn:hover:not(:disabled) .real-mouse-btn-indicator {
+    background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
+    box-shadow: 0 0 6px var(--accent-primary-glow);
+  }
+}
+
+/* Clique mecânico realista (pressionado) */
+.real-mouse-btn:active:not(:disabled) {
+  transform: translateY(2px) scale(0.985);
+  background: linear-gradient(180deg, #12121c 0%, #0c0c14 100%);
+  border-color: rgba(6, 182, 212, 0.6);
+  box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.8),
+              0 0 14px rgba(6, 182, 212, 0.3);
+}
+
+.real-mouse-btn:active:not(:disabled) .real-mouse-btn-indicator {
+  background: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.8);
+}
+
+.real-mouse-btn:active:not(:disabled) .real-mouse-icon-active {
+  color: var(--accent-cyan);
+}
+
+/* Estado desabilitado (computador offline) */
+.real-mouse-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+  filter: grayscale(0.6);
+}
+
+.real-mouse-btn-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  position: relative;
+  z-index: 1;
+}
+
+.real-mouse-icon {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition: color 120ms ease;
+}
+
+.real-mouse-icon-active {
+  color: var(--accent-primary);
+  transition: color 120ms ease;
+}
+
+.real-mouse-btn:hover:not(:disabled) .real-mouse-icon-active {
+  color: var(--accent-primary-hover);
+}
+
+.real-mouse-btn-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.real-mouse-btn-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.real-mouse-btn-subtitle {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+
+@media (max-width: 480px) {
+  .real-mouse-deck {
+    height: 76px;
+    padding: 4px;
+    gap: 4px;
+  }
+
+  .real-mouse-btn {
+    padding: 6px 10px;
+  }
+
+  .real-mouse-btn-content {
+    gap: 8px;
+  }
+
+  .real-mouse-icon {
+    width: 18px;
+    height: 24px;
+  }
+
+  .real-mouse-btn-title {
+    font-size: 0.8rem;
+  }
+
+  .real-mouse-btn-subtitle {
+    font-size: 0.62rem;
+  }
 }
 
 /* ==========================================================================
