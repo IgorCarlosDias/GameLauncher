@@ -39,7 +39,6 @@ const testSteamApiKey = (...args) => getSteamAchievementsService().testSteamApiK
 const getGameAchievementsFromDb = (...args) => getSteamAchievementsService().getGameAchievementsFromDb(...args);
 const syncGameAchievements = (...args) => getSteamAchievementsService().syncGameAchievements(...args);
 
-
 let ws = null;
 try {
   ws = require("windows-shortcuts");
@@ -47,18 +46,59 @@ try {
   // Ignora caso windows-shortcuts não esteja instalado
 }
 
-function resolveShortcut(filePath) {
-  return new Promise((resolve) => {
-    if (!ws) return resolve(null);
-    try {
-      ws.query(filePath, (err, res) => {
-        if (err || !res) return resolve(null);
-        resolve(res);
-      });
-    } catch {
-      resolve(null);
+async function resolveShortcut(filePath) {
+  if (!filePath) return null;
+
+  // 1. Prioriza o syscontrol nativo em C# (suporte completo a Unicode UTF-8, sem corrupção de acentos e latência ~1ms)
+  try {
+    const b64 = Buffer.from(filePath, "utf8").toString("base64");
+    const raw = await runSysControl("resolvelnkb64", b64);
+    if (raw && typeof raw === "string" && raw.trim().startsWith("{")) {
+      const parsed = JSON.parse(raw.trim());
+      if (parsed && parsed.target) {
+        return parsed;
+      }
     }
-  });
+  } catch {}
+
+  // 2. Fallback via PowerShell / WScript.Shell nativo com UTF-8
+  try {
+    const psRes = await new Promise((resolve) => {
+      const safePath = filePath.replace(/'/g, "''");
+      const psCmd = `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$sh=New-Object -ComObject WScript.Shell;$s=$sh.CreateShortcut('${safePath}');@{target=$s.TargetPath;args=$s.Arguments;workingDir=$s.WorkingDirectory;icon=$s.IconLocation}|ConvertTo-Json -Compress`;
+      execFile(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command", psCmd],
+        { encoding: "utf8", windowsHide: true, timeout: 5000 },
+        (err, stdout) => {
+          if (err || !stdout) return resolve(null);
+          try {
+            const parsed = JSON.parse(stdout.trim());
+            resolve(parsed && parsed.target ? parsed : null);
+          } catch {
+            resolve(null);
+          }
+        }
+      );
+    });
+    if (psRes) return psRes;
+  } catch {}
+
+  // 3. Fallback legado (windows-shortcuts)
+  if (ws) {
+    return new Promise((resolve) => {
+      try {
+        ws.query(filePath, (err, res) => {
+          if (err || !res) return resolve(null);
+          resolve(res);
+        });
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
+  return null;
 }
 
 const app = express();
@@ -317,6 +357,7 @@ const ALLOWED_SYSCONTROL_ACTIONS = new Set([
   "killforeground",
   "launch",
   "launchb64",
+  "resolvelnkb64",
   "cursorpos",
   "deskinfo",
   "listprocesses",
@@ -3391,6 +3432,32 @@ app.post("/play", systemActionLimiter, async (req, res) => {
     let targetPath = game.file;
     let workingDir = path.dirname(game.file);
     let launchArgs = "";
+
+    // Se o arquivo do jogo não for encontrado (ex: renomeado removendo ou adicionando acento como POKKÉN -> POKKEN),
+    // tenta localizar o arquivo correspondente na mesma pasta ignorando acentos
+    if (!fs.existsSync(targetPath)) {
+      try {
+        const folder = path.dirname(targetPath);
+        if (fs.existsSync(folder)) {
+          const normalizeStr = (s) =>
+            s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+          const targetBase = normalizeStr(path.basename(targetPath));
+          const files = fs.readdirSync(folder);
+          const found = files.find((f) => normalizeStr(f) === targetBase);
+          if (found) {
+            const actualPath = path.join(folder, found);
+            console.log(`[Launch] Caminho atualizado para arquivo existente: ${targetPath} -> ${actualPath}`);
+            targetPath = actualPath;
+            game.file = actualPath;
+            game.extension = path.extname(actualPath).toLowerCase();
+            workingDir = path.dirname(actualPath);
+            await dbRun("UPDATE games SET path = ? WHERE id = ?", [actualPath, game.id]).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn("[Launch] Erro ao localizar arquivo alternativo:", err.message);
+      }
+    }
 
     if (game.extension === ".lnk") {
       const shortcut = await resolveShortcut(game.file);

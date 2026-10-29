@@ -1156,6 +1156,36 @@ namespace SysControl {
                         }
                     }
                     break;
+                case "resolvelnkb64":
+                    if (args.Length > 1) {
+                        try {
+                            byte[] raw = Convert.FromBase64String(args[1]);
+                            string lnkPath = Encoding.UTF8.GetString(raw);
+                            if (File.Exists(lnkPath)) {
+                                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                                dynamic shell = Activator.CreateInstance(shellType);
+                                dynamic sc = shell.CreateShortcut(lnkPath);
+                                string target = sc.TargetPath ?? "";
+                                string scArgs = sc.Arguments ?? "";
+                                string workingDir = sc.WorkingDirectory ?? "";
+                                string icon = sc.IconLocation ?? "";
+
+                                StringBuilder sb = new StringBuilder();
+                                sb.Append("{");
+                                sb.Append("\"target\":\"").Append(EscapeJson(target)).Append("\",");
+                                sb.Append("\"args\":\"").Append(EscapeJson(scArgs)).Append("\",");
+                                sb.Append("\"workingDir\":\"").Append(EscapeJson(workingDir)).Append("\",");
+                                sb.Append("\"icon\":\"").Append(EscapeJson(icon)).Append("\"");
+                                sb.Append("}");
+                                Console.WriteLine(sb.ToString());
+                            } else {
+                                Console.WriteLine("{}");
+                            }
+                        } catch {
+                            Console.WriteLine("{}");
+                        }
+                    }
+                    break;
                 case "cursorpos":
                     POINT cur;
                     if (GetCursorPos(out cur)) {

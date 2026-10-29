@@ -306,7 +306,7 @@ function readLocalPlayerAchievements(steamAppId, steamPath = null, accountId = n
         total = map.size + unachievedSet.size;
         unlocked = map.size;
       } catch (binErr) {
-        console.warn(`[Steam Binary Stats] Erro ao parsear binários para app ${steamAppId}:`, binErr.message);
+        console.warn("[Steam Binary Stats] Erro ao parsear binários para app:", steamAppId, binErr?.message || binErr);
       }
     }
 
@@ -353,7 +353,7 @@ function readLocalPlayerAchievements(steamAppId, steamPath = null, accountId = n
           }
         }
       } catch (cacheErr) {
-        console.warn(`[Steam Library Cache] Erro ao ler librarycache para ${steamAppId}:`, cacheErr.message);
+        console.warn("[Steam Library Cache] Erro ao ler librarycache para:", steamAppId, cacheErr?.message || cacheErr);
       }
     }
 
@@ -576,7 +576,7 @@ function readEmulatorAchievements(steamAppId, gamePath = null) {
           }
         }
       } catch (err) {
-        console.warn(`[Emulator Achievements] Erro ao ler ${filePath}:`, err.message);
+        console.warn("[Emulator Achievements] Erro ao ler:", filePath, err?.message || err);
       }
     }
   }
@@ -733,7 +733,7 @@ async function syncGameAchievements(gameId, steamAppId, apiKey, customSteamId64 
     try {
       schema = await fetchGameSchema(steamAppId, cleanKey);
     } catch (schemaErr) {
-      console.warn(`[Steam Schema] Falha ao obter esquema para AppID ${steamAppId}:`, schemaErr.message);
+      console.warn("[Steam Schema] Falha ao obter esquema para AppID:", steamAppId, schemaErr?.message || schemaErr);
     }
   }
 

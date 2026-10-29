@@ -62,6 +62,11 @@ Com o **GameLauncher**, basta abrir o app (ou PWA) no celular para navegar pela 
 - **🖼️ Cache Local de Capas & Pré-Carregamento em Background**: Armazenamento offline de posters via Cache Storage API (`gamelauncher-covers-v1`) com fallback transparente para IndexedDB, carregamento a 0ms e pré-carregamento não bloqueante (`requestIdleCallback`).
 - **📱 Header Mobile Compacto**: Dimensões otimizadas e espaçamento reduzido para telas menores de smartphones, mantendo layout estendido em desktops via media queries.
 
+### 🎮 Suporte Unicode UTF-8 em Atalhos & Tolerância de Nomes (v1.5.2)
+- **🔤 Resolução Nativa de Atalhos em Unicode (`resolvelnkb64`)**: Integração do comando `resolvelnkb64` no helper C# nativo (`syscontrol.exe`), resolvendo atalhos `.lnk` com suporte completo a caracteres acentuados (UTF-8/UTF-16) sem perda ou corrupção de diacríticos em caminhos e argumentos.
+- **🛡️ Tolerância a Renomeação de Arquivos**: Fallback automático com normalização de diacríticos para localizar atalhos renomeados (ex: `POKKÉN` ↔ `POKKEN`) e atualizar o banco de dados dinamicamente.
+- **🚀 Correção de Inicialização no Yuzu**: Fim do erro *"O formato da ROM não é suportado"* em jogos cujos caminhos ou ROMs contenham acentos.
+
 ### 🖱️ Touchpad Virtual com Botões de Mouse Real & Otimizações (v1.5.0)
 - **🖱️ Botões Físicos de Mouse Real**: Dois botões dedicados (Botão Esquerdo e Botão Direito) integrados logo abaixo do Touchpad Virtual com ergonomia e estética de mouse físico (deck com fenda central, indicador de apoio tátil e ícones direcionais).
 - **⚡ Resposta Imediata & Háptica**: Disparo instantâneo com feedback háptico (`haptic.tap()`), animação mecânica de clique no estado ativo e prevenção de menu de contexto nativo do navegador.

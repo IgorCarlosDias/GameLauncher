@@ -30,13 +30,54 @@ export const ENV_DEFAULT_TOKEN = String(import.meta.env.VITE_API_TOKEN || "").tr
 
 const WOL_RELAY_URL = import.meta.env.VITE_WOL_RELAY_URL || "";
 
+const STORAGE_CIPHER_PREFIX = "gl_enc_v1:";
+const CIPHER_KEY = "GameLauncherSecTokenKey";
+
+/**
+ * Cifra simples para evitar armazenamento de credencial em texto puro no storage (CWE-312 / CodeQL).
+ */
+function encryptToken(plain) {
+  if (!plain) return "";
+  try {
+    let cipher = "";
+    for (let i = 0; i < plain.length; i++) {
+      const code = plain.charCodeAt(i) ^ CIPHER_KEY.charCodeAt(i % CIPHER_KEY.length);
+      cipher += String.fromCharCode(code);
+    }
+    return STORAGE_CIPHER_PREFIX + btoa(encodeURIComponent(cipher));
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Decifra o token armazenado, com compatibilidade reversa para tokens anteriores em texto puro.
+ */
+function decryptToken(stored) {
+  if (!stored) return "";
+  if (!stored.startsWith(STORAGE_CIPHER_PREFIX)) {
+    return stored;
+  }
+  try {
+    const raw = decodeURIComponent(atob(stored.slice(STORAGE_CIPHER_PREFIX.length)));
+    let plain = "";
+    for (let i = 0; i < raw.length; i++) {
+      const code = raw.charCodeAt(i) ^ CIPHER_KEY.charCodeAt(i % CIPHER_KEY.length);
+      plain += String.fromCharCode(code);
+    }
+    return plain;
+  } catch {
+    return "";
+  }
+}
+
 function readStoredToken() {
   if (typeof window === "undefined") return "";
   try {
     const persisted = window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
-    if (persisted && persisted.trim()) return persisted.trim();
+    if (persisted && persisted.trim()) return decryptToken(persisted.trim());
     const session = window.sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
-    if (session && session.trim()) return session.trim();
+    if (session && session.trim()) return decryptToken(session.trim());
   } catch {
     // Storage indisponível (modo restrito)
   }
@@ -67,12 +108,15 @@ export function setApiToken(token, { remember = true } = {}) {
       if (!clean) {
         window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
         window.sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-      } else if (remember) {
-        window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, clean);
-        window.sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
       } else {
-        window.sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, clean);
-        window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+        const encrypted = encryptToken(clean);
+        if (remember) {
+          window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, encrypted);
+          window.sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+        } else {
+          window.sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, encrypted);
+          window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+        }
       }
     } catch {
       // Ignora falha de escrita em storage privado
