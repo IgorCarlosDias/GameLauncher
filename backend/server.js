@@ -172,10 +172,6 @@ function isAllowedOrigin(origin) {
   if (!origin) return true;
   try {
     const url = new URL(origin);
-    const fePort = String(FRONTEND_PORT || "8060").trim();
-    if (url.port && url.port !== fePort && url.port !== "8070" && url.port !== "8060") {
-      return false;
-    }
     const host = url.hostname;
     const srvIp = String(SERVER_IP || "192.168.0.204").trim();
     const subnetPrefix = getAllowedSubnetPrefix();
@@ -185,7 +181,8 @@ function isAllowedOrigin(origin) {
       const second = parseInt(match[1], 10);
       return second >= 64 && second <= 127;
     };
-    return (
+
+    const isAuthorizedHost =
       host === "localhost" ||
       host === "127.0.0.1" ||
       host === "::1" ||
@@ -193,8 +190,10 @@ function isAllowedOrigin(origin) {
       host.startsWith(subnetPrefix) ||
       host.startsWith("192.168.0.") ||
       isTailscaleHost() ||
-      host.endsWith(".ts.net")
-    );
+      host.endsWith(".ts.net");
+
+    // Se o host pertence à sub-rede autorizada, localhost ou Tailscale, aceita a conexão
+    return isAuthorizedHost;
   } catch {
     return false;
   }

@@ -62,6 +62,17 @@ Com o **GameLauncher**, basta abrir o app (ou PWA) no celular para navegar pela 
 - **🖼️ Cache Local de Capas & Pré-Carregamento em Background**: Armazenamento offline de posters via Cache Storage API (`gamelauncher-covers-v1`) com fallback transparente para IndexedDB, carregamento a 0ms e pré-carregamento não bloqueante (`requestIdleCallback`).
 - **📱 Header Mobile Compacto**: Dimensões otimizadas e espaçamento reduzido para telas menores de smartphones, mantendo layout estendido em desktops via media queries.
 
+### 🎛️ Executável Central Nativo, Dark Dashboard & Gerenciador Unificado (v1.6.0)
+- **🎨 Dark Dashboard Desktop Moderno (`GameLauncher.exe`)**: Aplicativo nativo em C# Windows (.NET 4.x, apenas ~85 KB) com estética inspirada no Raycast e Discord:
+  - Janela frameless compacta (~480x580px) com cantos arredondados e borda integrada `#22272E` nativa via DWM no Windows 11 / região GDI no Windows 10.
+  - **Status Card Elevado**: Indicador em verde esmeralda com pulso radial reativo, exibição do link de acesso local com cópia rápida e badges compactas em pílula de status para Frontend e Backend (`Frontend: Ativo :8060 | Backend: Ativo :3060`).
+  - **Botões Ergonômicos**: Ação primária destacada (*Iniciar Servidor* com suporte a `Shift` para console), secundária elegante (*Abrir no Navegador* com resolução automática de IP e porta), contorno de perigo neutro que se ilumina em vermelho apenas no hover (*Parar Servidor*) e pílulas utilitárias para *Firewall*, *Auto-Start* e *Configurações*.
+  - **Mini Feed de Logs Terminal**: Console minimalista integrado em fonte monoespaçada com timestamps, separadores semânticos (`›`) e botão de limpeza rápida.
+  - **System Tray Inteligente**: Minimiza diretamente para a bandeja perto do relógio com clique duplo para restaurar, menu de contexto completo e **zero consumo de CPU** quando minimizado (animações pausadas automaticamente).
+- **⚙️ Setup & Configurações Integradas**: Diálogo frameless escuro integrado para alterar portas, pasta de jogos (`GAME_FOLDER`) com seletor de pastas nativo e chaves de API, com **sincronização automática entre os 3 arquivos `.env`** (`.env`, `backend/.env`, `frontend/.env`).
+- **🛡️ CORS Dinâmico & Flexibilidade Total de Portas**: O backend agora aceita requisições HTTP e WebSockets de qualquer porta de frontend originada da rede local autorizada (`192.168.0.0/24`), `localhost` ou `Tailscale`.
+- **📜 Scripts PowerShell Unificados**: Automação completa com `start-gamelauncher.ps1`, `stop-gamelauncher.ps1`, `gamelauncher-manager.ps1` e compilação instantânea com `build.ps1` usando o compilador nativo `csc.exe` do Windows.
+
 ### 🎮 Suporte Unicode UTF-8 em Atalhos & Tolerância de Nomes (v1.5.2)
 - **🔤 Resolução Nativa de Atalhos em Unicode (`resolvelnkb64`)**: Integração do comando `resolvelnkb64` no helper C# nativo (`syscontrol.exe`), resolvendo atalhos `.lnk` com suporte completo a caracteres acentuados (UTF-8/UTF-16) sem perda ou corrupção de diacríticos em caminhos e argumentos.
 - **🛡️ Tolerância a Renomeação de Arquivos**: Fallback automático com normalização de diacríticos para localizar atalhos renomeados (ex: `POKKÉN` ↔ `POKKEN`) e atualizar o banco de dados dinamicamente.
@@ -234,12 +245,26 @@ Isso cria regras liberando as portas `3060` e `8060` estritamente para a sua sub
 
 ---
 
-## 🚀 Execução e Inicialização Automática
+## 🚀 Execução, Controle e Configurações
 
-### Inicialização Manual
-- **`start-gamelauncher.bat`**: Inicia os servidores com janela de console visível (útil para ver logs e depuração).
-- **`start-hidden.vbs`**: Inicia o Backend e o Frontend de forma 100% invisível em segundo plano (sem janela de Prompt de Comando e sem tela preta).
-- **`stop-gamelauncher.bat`**: Encerra com segurança todos os processos do GameLauncher rodando nas portas `3060` e `8060`, elevando privilégios automaticamente para fechar processos administrativos.
+### 🎛️ Executável Central Unificado (Tudo-em-Um)
+- **`GameLauncher.exe`**: Painel de controle nativo Windows com ícone na bandeja do sistema (System Tray) e central de configurações integrada:
+  - 🟢 **Status em Tempo Real:** Monitora as portas ativas do Frontend e Backend e exibe a URL de acesso dinamicamente.
+  - ▶ **Iniciar Servidor:** Modo oculto (segundo plano) ou com janela de logs.
+  - ⏹ **Parar Servidor:** Encerra os serviços e libera as portas.
+  - 🌐 **Abrir no Navegador:** Dispara diretamente a URL `http://<IP_DO_PC>:<PORTA_FRONT>`.
+  - ⚙️ **Configurações & Setup:** Abre o painel completo de configuração para escolher a pasta dos jogos, portas do frontend e backend, e chaves de API com persistência automática nos arquivos `.env`.
+  - 🛡 **Firewall com 1 Clique:** Aplica regras no Windows Defender Firewall para as portas configuradas.
+  - ⏰ **Auto-Start no Windows:** Ativa ou desativa a inicialização automática silenciosa como Administrador.
+  - 📌 **Minimizar para a Bandeja:** Fica discreto perto do relógio do Windows com atalhos rápidos ao clicar com o botão direito.
+
+### Scripts PowerShell & Automação
+- **`gamelauncher-manager.ps1`**: Gerenciador via PowerShell com menu interativo no terminal ou parâmetros (`-Action Start`, `-Action Stop`, `-Action Firewall`, `-Action AutoStart`, `-Action OpenBrowser`).
+- **`start-gamelauncher.ps1`**: Inicia backend e frontend como Administrador (suporta flag `-Hidden`).
+- **`stop-gamelauncher.ps1`**: Encerra os processos nas portas configuradas e `syscontrol`.
+- **`setup-firewall.ps1`**: Configura as regras restritas no Firewall do Windows.
+- **`setup-autostart.ps1`**: Configura o Agendador de Tarefas para iniciar com o Windows como Administrador silencioso.
+- **`build.ps1`**: Script de compilação que recompila o `GameLauncher.exe` unificado instantaneamente.
 
 ### Inicialização Automática com o Windows (Silenciosa & Sem Console)
 

@@ -25,7 +25,7 @@ export default function AppHeader({ pc, onRefresh, refreshing }) {
         <div className="app-header__text">
           <div className="app-header__title-row">
             <h1 className="app-header__title">GameLauncher</h1>
-            <span className="app-header__version">v1.5.2</span>
+            <span className="app-header__version">v1.6.0</span>
           </div>
           <p
             className={`status-pill status-pill--${pc.status}`}
